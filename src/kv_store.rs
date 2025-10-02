@@ -1,7 +1,4 @@
 use std::collections::HashMap;
-
-// Struct for kvstore
-
 pub struct KvStore {
     store: HashMap<String, String>,
 }
@@ -19,5 +16,9 @@ impl KvStore {
 
     pub fn get(&self, key: &str) -> Option<&String> {
         self.store.get(key)
+    }
+
+    pub fn delete(&mut self, key: &str) -> Option<String> {
+        self.store.remove(key)
     }
 }
