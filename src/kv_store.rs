@@ -11,6 +11,19 @@ pub enum Value {
     Bool(bool),
     Json(JsonValue),
 }
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Str(s) => write!(f, "{}", s),
+            Value::Int(i) => write!(f, "{}", i),
+            Value::Float(x) => write!(f, "{}", x),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Json(j) => write!(f, "{}", j),
+        }
+    }
+}
+
 pub struct KvStore {
     store: HashMap<String, String>,
 }
