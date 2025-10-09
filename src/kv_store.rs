@@ -1,4 +1,16 @@
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+
+pub enum Value {
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Json(JsonValue),
+}
 pub struct KvStore {
     store: HashMap<String, String>,
 }
