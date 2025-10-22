@@ -1,4 +1,4 @@
-use rust_kv_store::kv_store::KvStore;
+use rust_kv_store::kv_store::{KvStore, Value};
 
 #[test]
 fn test_set_and_get() {

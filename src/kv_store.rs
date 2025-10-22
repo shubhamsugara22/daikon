@@ -24,6 +24,42 @@ impl fmt::Display for Value {
     }
 }
 
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::Str(s)
+    }
+}
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::Str(s.to_string())
+    }
+}
+impl From<i64> for Value {
+    fn from(i: i64) -> Self {
+        Value::Int(i)
+    }
+}
+impl From<i32> for Value {
+    fn from(i: i32) -> Self {
+        Value::Int(i as i64)
+    }
+}
+impl From<f64> for Value {
+    fn from(f: f64) -> Self {
+        Value::Float(f)
+    }
+}
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Value::Bool(b)
+    }
+}
+impl From<JsonValue> for Value {
+    fn from(j: JsonValue) -> Self {
+        Value::Json(j)
+    }
+}
+
 pub struct KvStore {
     store: HashMap<String, String>,
 }

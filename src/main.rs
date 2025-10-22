@@ -1,8 +1,8 @@
 // Import the kv_store module
-mod kv_store;
+use rust_kv_store::kv_store::KvStore;
 
 fn main() {
-    let mut store = kv_store::KvStore::new();
+    let mut store = KvStore::new();
     store.set("key1".to_string(), "value1".to_string());
     store.set("key2".to_string(), "value2".to_string());
 
