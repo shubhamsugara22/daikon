@@ -1,9 +1,13 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq)]
-
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Str(String),
     Int(i64),
@@ -59,9 +63,9 @@ impl From<JsonValue> for Value {
         Value::Json(j)
     }
 }
-
+#[derive(Serialize, Deserialize)]
 pub struct KvStore {
-    store: HashMap<String, String>,
+    store: HashMap<String, Value>,
 }
 
 impl KvStore {
@@ -71,15 +75,60 @@ impl KvStore {
         }
     }
 
-    pub fn set(&mut self, key: String, value: String) {
-        self.store.insert(key, value);
+    /// Generic set: accepts any type convertible into Value
+    pub fn set<VT>(&mut self, key: String, value: VT)
+    where
+        VT: Into<Value>,
+    {
+        self.store.insert(key, value.into());
     }
 
-    pub fn get(&self, key: &str) -> Option<&String> {
+    pub fn get(&self, key: &str) -> Option<&Value> {
         self.store.get(key)
     }
 
-    pub fn delete(&mut self, key: &str) -> Option<String> {
+    /// Convenience getters...
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        match self.get(key) {
+            Some(Value::Str(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+    pub fn get_i64(&self, key: &str) -> Option<i64> {
+        match self.get(key) {
+            Some(Value::Int(i)) => Some(*i),
+            _ => None,
+        }
+    }
+    pub fn get_f64(&self, key: &str) -> Option<f64> {
+        match self.get(key) {
+            Some(Value::Float(x)) => Some(*x),
+            _ => None,
+        }
+    }
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        match self.get(key) {
+            Some(Value::Bool(b)) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn delete(&mut self, key: &str) -> Option<Value> {
         self.store.remove(key)
+    }
+
+    /// Persist store to JSON file (overwrites).
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &self)?;
+        Ok(())
+    }
+
+    /// Load store from JSON file.
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let store: KvStore = serde_json::from_reader(reader)?;
+        Ok(store)
     }
 }
