@@ -3,9 +3,11 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
@@ -130,5 +132,67 @@ impl KvStore {
         let reader = BufReader::new(file);
         let store: KvStore = serde_json::from_reader(reader)?;
         Ok(store)
+    }
+    /// Save with backup/versioning:
+    /// - If the target file exists, it is copied to `<filename>.bak.<epoch_secs>`
+    /// - The file is written atomically (write temp -> rename)
+    /// - Keeps at most `max_versions` backups (oldest removed)
+    pub fn save_with_version<P: AsRef<Path>>(
+        &self,
+        path: P,
+        max_versions: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let path = path.as_ref();
+
+        // If existing file present, create a timestamped backup next to it
+        if path.exists() {
+            let epoch = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+            let file_name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or("invalid filename")?;
+            let parent = path.parent().unwrap_or_else(|| Path::new("."));
+            let backup_name = format!("{}.bak.{}", file_name, epoch);
+            let backup_path = parent.join(backup_name);
+
+            fs::copy(path, &backup_path)?;
+
+            // Prune old backups matching "<file>.bak.*" keeping newest `max_versions`
+            let prefix = format!("{}{}", file_name, ".bak.");
+            let mut backups: Vec<_> = fs::read_dir(parent)?
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_type().map(|t| t.is_file()).unwrap_or(false)
+                        && e.file_name()
+                            .to_str()
+                            .map(|s| s.starts_with(&prefix))
+                            .unwrap_or(false)
+                })
+                .collect();
+
+            // Sort by modified time (oldest first)
+            backups.sort_by_key(|e| {
+                e.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH)
+            });
+
+            while backups.len() > max_versions {
+                if let Some(oldest) = backups.first() {
+                    let _ = fs::remove_file(oldest.path());
+                    backups.remove(0);
+                }
+            }
+        }
+
+        // Atomic write: write to temp file then rename
+        let tmp_path = path.with_extension("tmp");
+        {
+            let file = File::create(&tmp_path)?;
+            serde_json::to_writer_pretty(file, &self)?;
+        }
+        fs::rename(&tmp_path, path)?;
+
+        Ok(())
     }
 }

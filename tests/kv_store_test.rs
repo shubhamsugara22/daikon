@@ -3,6 +3,56 @@ use std::env;
 use std::fs;
 
 #[test]
+fn test_versioning_and_prune() {
+    use std::time::Duration;
+    let mut store = KvStore::new();
+    store.set("a".to_string(), "1".to_string());
+
+    let mut path = std::env::temp_dir();
+    path.push("kv_store_version.json");
+
+    // cleanup any leftover from previous runs
+    let _ = fs::remove_file(&path);
+
+    // first save -> no backup yet
+    store.save_with_version(&path, 2).expect("save1 failed");
+
+    // small sleep to ensure different timestamps (only necessary on very fast filesystems)
+    std::thread::sleep(Duration::from_millis(10));
+
+    // second save -> creates first backup
+    store.set("b".to_string(), "2".to_string());
+    store.save_with_version(&path, 2).expect("save2 failed");
+
+    std::thread::sleep(Duration::from_millis(10));
+
+    // third save -> creates another backup and should prune keeping max 2
+    store.set("c".to_string(), "3".to_string());
+    store.save_with_version(&path, 2).expect("save3 failed");
+
+    // verify backups count <= 2
+    let parent = path.parent().unwrap();
+    let file_name = path.file_name().unwrap().to_str().unwrap();
+    let prefix = format!("{}{}", file_name, ".bak.");
+    let backups: Vec<_> = fs::read_dir(parent)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|s| s.starts_with(&prefix))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    assert!(backups.len() <= 2, "backup count should be pruned to max 2");
+
+    // cleanup
+    let _ = fs::remove_file(&path);
+    for b in backups {
+        let _ = fs::remove_file(b.path());
+    }
+}
 fn test_save_and_load() {
     let mut store = KvStore::new();
     store.set("k1".to_string(), "v1".to_string());
