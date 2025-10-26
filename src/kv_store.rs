@@ -125,7 +125,14 @@ impl KvStore {
         serde_json::to_writer_pretty(file, &self)?;
         Ok(())
     }
+    
+    pub fn is_empty(&self) -> bool {
+        self.store.is_empty()
+    }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.store.iter()
+    }
     /// Load store from JSON file.
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
         let file = File::open(path)?;
