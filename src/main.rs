@@ -56,12 +56,12 @@ fn main() {
         },
     }
 
-    store.set("key1".to_string(), "value1".to_string());
-    store.set("key2".to_string(), "value2".to_string());
+    // store.set("key1".to_string(), "value1".to_string());
+    // store.set("key2".to_string(), "value2".to_string());
 
-    if let Some(value) = store.get("key1") {
-        println!("key1: {}", value);
-    }
+    // if let Some(value) = store.get("key1") {
+    //     println!("key1: {}", value);
+    // }
 
     // Delete the key
     // if let Some(removed) = store.delete("key1") {
