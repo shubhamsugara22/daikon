@@ -1,5 +1,6 @@
 use actix_web::{web, App, HttpServer};
 use rust_kv_store::{api, kv_store::KvStore};
+use std::env;
 use std::sync::Mutex;
 
 #[actix_web::main]
