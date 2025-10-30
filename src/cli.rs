@@ -15,6 +15,12 @@ pub struct Cli {
 pub enum Commands {
     /// Set a key-value pair
     Set { key: String, value: String },
+    SetTTL {
+        key: String,
+        value: String,
+        #[arg(short, long)]
+        ttl: u64,
+    },
     /// Get a value by key
     Get { key: String },
     /// Delete a key-value pair

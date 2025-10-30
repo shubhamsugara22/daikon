@@ -26,6 +26,10 @@ fn main() {
             store.set(key.clone(), value);
             println!("Set '{}' successfully", key);
         }
+        Commands::SetTTL { key, value, ttl } => {
+            store.set_with_ttl(key.clone(), value, Duration::from_secs(ttl));
+            println!("Set '{}' successfully with {}s TTL", key, ttl);
+        }
         Commands::Get { key } => match store.get(&key) {
             Some(value) => println!("{}: {}", key, value),
             None => println!("Key '{}' not found", key),

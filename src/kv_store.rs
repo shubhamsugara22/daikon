@@ -7,9 +7,14 @@ use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValueWithTTL {
+    pub value: Value,
+    pub expires_at: Option<SystemTime>,
+}
 pub enum Value {
     Str(String),
     Int(i64),
@@ -67,7 +72,7 @@ impl From<JsonValue> for Value {
 }
 #[derive(Serialize, Deserialize)]
 pub struct KvStore {
-    store: HashMap<String, Value>,
+    store: HashMap<String, ValueWithTTL>,
 }
 
 impl KvStore {
@@ -76,17 +81,42 @@ impl KvStore {
             store: HashMap::new(),
         }
     }
-
-    /// Generic set: accepts any type convertible into Value
-    pub fn set<VT>(&mut self, key: String, value: VT)
+    pub fn set_with_ttl<V>(&mut self, key: String, value: V, ttl: Duration)
     where
-        VT: Into<Value>,
+        V: Into<Value>,
     {
-        self.store.insert(key, value.into());
+        let expires_at = Some(SystemTime::now() + ttl);
+        self.store.insert(
+            key,
+            ValueWithTTL {
+                value: value.into(),
+                expires_at,
+            },
+        );
     }
 
+    pub fn set<V>(&mut self, key: String, value: V)
+    where
+        V: Into<Value>,
+    {
+        self.store.insert(
+            key,
+            ValueWithTTL {
+                value: value.into(),
+                expires_at: None,
+            },
+        );
+    }
+    /// Generic set: accepts any type convertible into Value
     pub fn get(&self, key: &str) -> Option<&Value> {
-        self.store.get(key)
+        self.store.get(key).and_then(|v| {
+            if let Some(expires_at) = v.expires_at {
+                if SystemTime::now() > expires_at {
+                    return None;
+                }
+            }
+            Some(&v.value)
+        })
     }
 
     /// Convenience getters...
@@ -116,7 +146,7 @@ impl KvStore {
     }
 
     pub fn delete(&mut self, key: &str) -> Option<Value> {
-        self.store.remove(key)
+        self.store.remove(key).map(|v| v.value)
     }
 
     /// Persist store to JSON file (overwrites).
@@ -125,13 +155,21 @@ impl KvStore {
         serde_json::to_writer_pretty(file, &self)?;
         Ok(())
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.store.is_empty()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
-        self.store.iter()
+        self.store.iter().filter_map(|(k, v)| {
+            if let Some(expires_at) = v.expires_at {
+                if SystemTime::now() > expires_at {
+                    return None;
+                }
+            }
+            Some((k, &v.value))
+        })
+    }
     }
     /// Load store from JSON file.
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
