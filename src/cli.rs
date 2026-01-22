@@ -34,4 +34,26 @@ pub enum Commands {
     },
     /// Load the store from file
     Load,
+    /// Increment an integer value
+    Incr { key: String },
+    /// Decrement an integer value
+    Decr { key: String },
+    /// Increment by a specific amount
+    IncrBy { key: String, amount: i64 },
+    /// Append to a string value
+    Append { key: String, value: String },
+    /// Get and set value atomically
+    GetSet { key: String, value: String },
+    /// Get multiple values
+    MGet { keys: Vec<String> },
+    /// Set multiple key-value pairs
+    MSet { pairs: Vec<String> },
+    /// Check if key(s) exist
+    Exists { keys: Vec<String> },
+    /// Find keys matching a pattern
+    Keys { pattern: String },
+    /// Show store statistics
+    Stats,
+    /// Clean up expired keys
+    Cleanup,
 }

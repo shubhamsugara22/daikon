@@ -7,14 +7,26 @@ use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StoreStats {
+    pub total_keys: usize,
+    pub expired_keys: usize,
+    pub total_reads: u64,
+    pub total_writes: u64,
+    pub total_deletes: u64,
+    pub hits: u64,
+    pub misses: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValueWithTTL {
     pub value: Value,
-    pub expires_at: Option<SystemTime>,
+    pub expires_at: Option<u64>,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Str(String),
     Int(i64),
@@ -73,19 +85,26 @@ impl From<JsonValue> for Value {
 #[derive(Serialize, Deserialize)]
 pub struct KvStore {
     store: HashMap<String, ValueWithTTL>,
+    #[serde(default)]
+    stats: StoreStats,
 }
 
 impl KvStore {
     pub fn new() -> Self {
         KvStore {
             store: HashMap::new(),
+            stats: StoreStats::default(),
         }
     }
     pub fn set_with_ttl<V>(&mut self, key: String, value: V, ttl: Duration)
     where
         V: Into<Value>,
     {
-        let expires_at = Some(SystemTime::now() + ttl);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let expires_at = now.checked_add(ttl.as_secs());
         self.store.insert(
             key,
             ValueWithTTL {
@@ -93,6 +112,7 @@ impl KvStore {
                 expires_at,
             },
         );
+        self.stats.total_writes += 1;
     }
 
     pub fn set<V>(&mut self, key: String, value: V)
@@ -106,39 +126,52 @@ impl KvStore {
                 expires_at: None,
             },
         );
+        self.stats.total_writes += 1;
     }
     /// Generic set: accepts any type convertible into Value
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.store.get(key).and_then(|v| {
-            if let Some(expires_at) = v.expires_at {
-                if SystemTime::now() > expires_at {
+    pub fn get(&mut self, key: &str) -> Option<&Value> {
+        self.stats.total_reads += 1;
+        let result = self.store.get(key).and_then(|v| {
+            if let Some(exp) = v.expires_at {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if now > exp {
                     return None;
                 }
             }
             Some(&v.value)
-        })
+        });
+
+        if result.is_some() {
+            self.stats.hits += 1;
+        } else {
+            self.stats.misses += 1;
+        }
+        result
     }
 
     /// Convenience getters...
-    pub fn get_string(&self, key: &str) -> Option<String> {
+    pub fn get_string(&mut self, key: &str) -> Option<String> {
         match self.get(key) {
             Some(Value::Str(s)) => Some(s.clone()),
             _ => None,
         }
     }
-    pub fn get_i64(&self, key: &str) -> Option<i64> {
+    pub fn get_i64(&mut self, key: &str) -> Option<i64> {
         match self.get(key) {
             Some(Value::Int(i)) => Some(*i),
             _ => None,
         }
     }
-    pub fn get_f64(&self, key: &str) -> Option<f64> {
+    pub fn get_f64(&mut self, key: &str) -> Option<f64> {
         match self.get(key) {
             Some(Value::Float(x)) => Some(*x),
             _ => None,
         }
     }
-    pub fn get_bool(&self, key: &str) -> Option<bool> {
+    pub fn get_bool(&mut self, key: &str) -> Option<bool> {
         match self.get(key) {
             Some(Value::Bool(b)) => Some(*b),
             _ => None,
@@ -146,7 +179,178 @@ impl KvStore {
     }
 
     pub fn delete(&mut self, key: &str) -> Option<Value> {
-        self.store.remove(key).map(|v| v.value)
+        let result = self.store.remove(key).map(|v| v.value);
+        if result.is_some() {
+            self.stats.total_deletes += 1;
+        }
+        result
+    }
+
+    // Atomic Operations
+
+    /// Increment an integer value atomically. Returns new value or error if key doesn't exist or isn't an integer.
+    pub fn incr(&mut self, key: &str) -> Result<i64, String> {
+        match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Int(ref mut val) = entry.value {
+                    *val += 1;
+                    self.stats.total_writes += 1;
+                    Ok(*val)
+                } else {
+                    Err(format!("Key '{}' is not an integer", key))
+                }
+            }
+            None => Err(format!("Key '{}' not found", key)),
+        }
+    }
+
+    /// Decrement an integer value atomically. Returns new value or error.
+    pub fn decr(&mut self, key: &str) -> Result<i64, String> {
+        match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Int(ref mut val) = entry.value {
+                    *val -= 1;
+                    self.stats.total_writes += 1;
+                    Ok(*val)
+                } else {
+                    Err(format!("Key '{}' is not an integer", key))
+                }
+            }
+            None => Err(format!("Key '{}' not found", key)),
+        }
+    }
+
+    /// Increment by a specific amount. Returns new value or error.
+    pub fn incrby(&mut self, key: &str, amount: i64) -> Result<i64, String> {
+        match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Int(ref mut val) = entry.value {
+                    *val += amount;
+                    self.stats.total_writes += 1;
+                    Ok(*val)
+                } else {
+                    Err(format!("Key '{}' is not an integer", key))
+                }
+            }
+            None => Err(format!("Key '{}' not found", key)),
+        }
+    }
+
+    /// Append to a string value. Returns new length or error.
+    pub fn append(&mut self, key: &str, value: &str) -> Result<usize, String> {
+        match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Str(ref mut s) = entry.value {
+                    s.push_str(value);
+                    self.stats.total_writes += 1;
+                    Ok(s.len())
+                } else {
+                    Err(format!("Key '{}' is not a string", key))
+                }
+            }
+            None => {
+                // If key doesn't exist, create it with the value
+                self.set(key.to_string(), value.to_string());
+                Ok(value.len())
+            }
+        }
+    }
+
+    /// Get old value and set new value atomically.
+    pub fn getset(&mut self, key: String, value: impl Into<Value>) -> Option<Value> {
+        let old_value = self.store.get(&key).map(|v| v.value.clone());
+        self.set(key, value);
+        old_value
+    }
+
+    // Batch Operations
+
+    /// Get multiple values at once. Returns Vec of Option<Value>.
+    pub fn mget(&mut self, keys: &[String]) -> Vec<Option<Value>> {
+        keys.iter().map(|k| self.get(k).cloned()).collect()
+    }
+
+    /// Set multiple key-value pairs at once.
+    pub fn mset(&mut self, pairs: Vec<(String, String)>) {
+        for (key, value) in pairs {
+            self.set(key, value);
+        }
+    }
+
+    /// Check if key exists and is not expired.
+    pub fn exists(&mut self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Check if multiple keys exist. Returns count of existing keys.
+    pub fn exists_many(&mut self, keys: &[String]) -> usize {
+        keys.iter().filter(|k| self.exists(k)).count()
+    }
+
+    // Pattern Matching
+
+    /// Find keys matching a glob pattern (*, ?).
+    pub fn keys(&self, pattern: &str) -> Vec<String> {
+        self.store
+            .keys()
+            .filter(|key| {
+                // Check if key is expired
+                if let Some(entry) = self.store.get(*key) {
+                    if let Some(exp) = entry.expires_at {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        if now > exp {
+                            return false;
+                        }
+                    }
+                }
+
+                // Simple glob matching
+                matches_glob(key, pattern)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Get store statistics.
+    pub fn stats(&self) -> &StoreStats {
+        &self.stats
+    }
+
+    /// Reset statistics.
+    pub fn reset_stats(&mut self) {
+        self.stats = StoreStats::default();
+    }
+
+    /// Clean up expired keys manually.
+    pub fn cleanup_expired(&mut self) -> usize {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let expired: Vec<String> = self
+            .store
+            .iter()
+            .filter_map(|(k, v)| {
+                if let Some(exp) = v.expires_at {
+                    if now > exp {
+                        return Some(k.clone());
+                    }
+                }
+                None
+            })
+            .collect();
+
+        let count = expired.len();
+        for key in expired {
+            self.store.remove(&key);
+        }
+
+        self.stats.expired_keys += count;
+        count
     }
 
     /// Persist store to JSON file (overwrites).
@@ -160,17 +364,25 @@ impl KvStore {
         self.store.is_empty()
     }
 
+    pub fn len(&self) -> usize {
+        self.store.len()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.store.iter().filter_map(|(k, v)| {
-            if let Some(expires_at) = v.expires_at {
-                if SystemTime::now() > expires_at {
+            if let Some(exp) = v.expires_at {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if now > exp {
                     return None;
                 }
             }
             Some((k, &v.value))
         })
     }
-    }
+
     /// Load store from JSON file.
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
         let file = File::open(path)?;
@@ -240,4 +452,32 @@ impl KvStore {
 
         Ok(())
     }
+}
+
+// Helper function for simple glob pattern matching
+fn matches_glob(text: &str, pattern: &str) -> bool {
+    let text_chars: Vec<char> = text.chars().collect();
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+
+    fn match_recursive(text: &[char], pattern: &[char], ti: usize, pi: usize) -> bool {
+        if pi == pattern.len() {
+            return ti == text.len();
+        }
+
+        if pattern[pi] == '*' {
+            // Match zero or more characters
+            for i in ti..=text.len() {
+                if match_recursive(text, pattern, i, pi + 1) {
+                    return true;
+                }
+            }
+            false
+        } else if ti < text.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
+            match_recursive(text, pattern, ti + 1, pi + 1)
+        } else {
+            false
+        }
+    }
+
+    match_recursive(&text_chars, &pattern_chars, 0, 0)
 }
