@@ -1,0 +1,12 @@
+{
+  "store": {},
+  "stats": {
+    "total_keys": 0,
+    "expired_keys": 0,
+    "total_reads": 0,
+    "total_writes": 0,
+    "total_deletes": 0,
+    "hits": 0,
+    "misses": 0
+  }
+}
