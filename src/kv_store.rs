@@ -1,7 +1,8 @@
+use crate::config::StoreConfig;
+use crate::error::{KvStoreError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::fs::File;
@@ -9,6 +10,7 @@ use std::io::BufReader;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreStats {
@@ -19,6 +21,8 @@ pub struct StoreStats {
     pub total_deletes: u64,
     pub hits: u64,
     pub misses: u64,
+    pub memory_bytes: usize,
+    pub evictions: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,46 +91,85 @@ pub struct KvStore {
     store: HashMap<String, ValueWithTTL>,
     #[serde(default)]
     stats: StoreStats,
+    #[serde(skip)]
+    config: StoreConfig,
+    #[serde(skip)]
+    lru_order: Vec<String>,
 }
 
 impl KvStore {
     pub fn new() -> Self {
+        Self::with_config(StoreConfig::default())
+    }
+
+    pub fn with_config(config: StoreConfig) -> Self {
+        info!("Initializing KvStore with config: {:?}", config);
         KvStore {
             store: HashMap::new(),
             stats: StoreStats::default(),
+            config,
+            lru_order: Vec::new(),
         }
     }
-    pub fn set_with_ttl<V>(&mut self, key: String, value: V, ttl: Duration)
+    pub fn set_with_ttl<V>(&mut self, key: String, value: V, ttl: Duration) -> Result<()>
     where
         V: Into<Value>,
     {
+        self.validate_key(&key)?;
+        let value = value.into();
+        self.validate_value(&value)?;
+
+        // Check memory limits before insert
+        if self.config.max_memory_bytes > 0 && self.config.lru_eviction_enabled {
+            self.enforce_memory_limit()?;
+        }
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         let expires_at = now.checked_add(ttl.as_secs());
-        self.store.insert(
-            key,
-            ValueWithTTL {
-                value: value.into(),
-                expires_at,
-            },
-        );
+
+        let value_size = self.estimate_value_size(&value);
+        self.store
+            .insert(key.clone(), ValueWithTTL { value, expires_at });
+
+        self.update_lru(&key);
         self.stats.total_writes += 1;
+        self.stats.total_keys = self.store.len();
+        self.stats.memory_bytes += value_size;
+        debug!("Set key '{}' with TTL {:?}", key, ttl);
+        Ok(())
     }
 
-    pub fn set<V>(&mut self, key: String, value: V)
+    pub fn set<V>(&mut self, key: String, value: V) -> Result<()>
     where
         V: Into<Value>,
     {
+        self.validate_key(&key)?;
+        let value = value.into();
+        self.validate_value(&value)?;
+
+        // Check memory limits before insert
+        if self.config.max_memory_bytes > 0 && self.config.lru_eviction_enabled {
+            self.enforce_memory_limit()?;
+        }
+
+        let value_size = self.estimate_value_size(&value);
         self.store.insert(
-            key,
+            key.clone(),
             ValueWithTTL {
-                value: value.into(),
+                value,
                 expires_at: None,
             },
         );
+
+        self.update_lru(&key);
         self.stats.total_writes += 1;
+        self.stats.total_keys = self.store.len();
+        self.stats.memory_bytes += value_size;
+        debug!("Set key '{}'", key);
+        Ok(())
     }
     /// Generic set: accepts any type convertible into Value
     pub fn get(&mut self, key: &str) -> Option<&Value> {
@@ -189,78 +232,102 @@ impl KvStore {
     // Atomic Operations
 
     /// Increment an integer value atomically. Returns new value or error if key doesn't exist or isn't an integer.
-    pub fn incr(&mut self, key: &str) -> Result<i64, String> {
+    pub fn incr(&mut self, key: &str) -> Result<i64> {
         match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Int(ref mut val) = entry.value {
                     *val += 1;
                     self.stats.total_writes += 1;
+                    self.update_lru(&key.to_string());
+                    debug!("Incremented key '{}' to {}", key, *val);
                     Ok(*val)
                 } else {
-                    Err(format!("Key '{}' is not an integer", key))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Int",
+                        self.get_type_name(&entry.value),
+                    ))
                 }
             }
-            None => Err(format!("Key '{}' not found", key)),
+            None => Err(KvStoreError::KeyNotFound(key.to_string())),
         }
     }
 
     /// Decrement an integer value atomically. Returns new value or error.
-    pub fn decr(&mut self, key: &str) -> Result<i64, String> {
+    pub fn decr(&mut self, key: &str) -> Result<i64> {
         match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Int(ref mut val) = entry.value {
                     *val -= 1;
                     self.stats.total_writes += 1;
+                    self.update_lru(&key.to_string());
+                    debug!("Decremented key '{}' to {}", key, *val);
                     Ok(*val)
                 } else {
-                    Err(format!("Key '{}' is not an integer", key))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Int",
+                        self.get_type_name(&entry.value),
+                    ))
                 }
             }
-            None => Err(format!("Key '{}' not found", key)),
+            None => Err(KvStoreError::KeyNotFound(key.to_string())),
         }
     }
 
     /// Increment by a specific amount. Returns new value or error.
-    pub fn incrby(&mut self, key: &str, amount: i64) -> Result<i64, String> {
+    pub fn incrby(&mut self, key: &str, amount: i64) -> Result<i64> {
         match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Int(ref mut val) = entry.value {
                     *val += amount;
                     self.stats.total_writes += 1;
+                    self.update_lru(&key.to_string());
+                    debug!("Incremented key '{}' by {} to {}", key, amount, *val);
                     Ok(*val)
                 } else {
-                    Err(format!("Key '{}' is not an integer", key))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Int",
+                        self.get_type_name(&entry.value),
+                    ))
                 }
             }
-            None => Err(format!("Key '{}' not found", key)),
+            None => Err(KvStoreError::KeyNotFound(key.to_string())),
         }
     }
 
     /// Append to a string value. Returns new length or error.
-    pub fn append(&mut self, key: &str, value: &str) -> Result<usize, String> {
+    pub fn append(&mut self, key: &str, value: &str) -> Result<usize> {
         match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Str(ref mut s) = entry.value {
                     s.push_str(value);
                     self.stats.total_writes += 1;
+                    self.update_lru(&key.to_string());
+                    debug!("Appended to key '{}', new length: {}", key, s.len());
                     Ok(s.len())
                 } else {
-                    Err(format!("Key '{}' is not a string", key))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Str",
+                        self.get_type_name(&entry.value),
+                    ))
                 }
             }
             None => {
                 // If key doesn't exist, create it with the value
-                self.set(key.to_string(), value.to_string());
+                self.set(key.to_string(), value.to_string())?;
                 Ok(value.len())
             }
         }
     }
 
     /// Get old value and set new value atomically.
-    pub fn getset(&mut self, key: String, value: impl Into<Value>) -> Option<Value> {
+    pub fn getset(&mut self, key: String, value: impl Into<Value>) -> Result<Option<Value>> {
         let old_value = self.store.get(&key).map(|v| v.value.clone());
-        self.set(key, value);
-        old_value
+        self.set(key, value)?;
+        Ok(old_value)
     }
 
     // Batch Operations
@@ -271,10 +338,11 @@ impl KvStore {
     }
 
     /// Set multiple key-value pairs at once.
-    pub fn mset(&mut self, pairs: Vec<(String, String)>) {
+    pub fn mset(&mut self, pairs: Vec<(String, String)>) -> Result<()> {
         for (key, value) in pairs {
-            self.set(key, value);
+            self.set(key, value)?;
         }
+        Ok(())
     }
 
     /// Check if key exists and is not expired.
@@ -451,6 +519,97 @@ impl KvStore {
         fs::rename(&tmp_path, path)?;
 
         Ok(())
+    }
+
+    // ===== Validation Methods =====
+
+    fn validate_key(&self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            return Err(KvStoreError::InvalidKey("Key cannot be empty".to_string()));
+        }
+
+        let key_size = key.len();
+        if key_size > self.config.max_key_size {
+            return Err(KvStoreError::KeyTooLarge {
+                size: key_size,
+                max: self.config.max_key_size,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn validate_value(&self, value: &Value) -> Result<()> {
+        let value_size = self.estimate_value_size(value);
+        if value_size > self.config.max_value_size {
+            return Err(KvStoreError::ValueTooLarge {
+                size: value_size,
+                max: self.config.max_value_size,
+            });
+        }
+        Ok(())
+    }
+
+    fn estimate_value_size(&self, value: &Value) -> usize {
+        match value {
+            Value::Str(s) => s.len(),
+            Value::Int(_) => 8,
+            Value::Float(_) => 8,
+            Value::Bool(_) => 1,
+            Value::Json(j) => j.to_string().len(),
+        }
+    }
+
+    fn get_type_name(&self, value: &Value) -> String {
+        match value {
+            Value::Str(_) => "Str".to_string(),
+            Value::Int(_) => "Int".to_string(),
+            Value::Float(_) => "Float".to_string(),
+            Value::Bool(_) => "Bool".to_string(),
+            Value::Json(_) => "Json".to_string(),
+        }
+    }
+
+    // ===== LRU Management =====
+
+    fn update_lru(&mut self, key: &str) {
+        // Remove key if it exists in LRU order
+        self.lru_order.retain(|k| k != key);
+        // Add to end (most recently used)
+        self.lru_order.push(key.to_string());
+    }
+
+    fn enforce_memory_limit(&mut self) -> Result<()> {
+        if self.config.max_memory_bytes == 0 {
+            return Ok(());
+        }
+
+        while self.stats.memory_bytes > self.config.max_memory_bytes {
+            if let Some(lru_key) = self.lru_order.first().cloned() {
+                warn!("Memory limit exceeded, evicting key: {}", lru_key);
+                if let Some(entry) = self.store.remove(&lru_key) {
+                    let value_size = self.estimate_value_size(&entry.value);
+                    self.stats.memory_bytes = self.stats.memory_bytes.saturating_sub(value_size);
+                    self.stats.evictions += 1;
+                    self.stats.total_keys = self.store.len();
+                }
+                self.lru_order.remove(0);
+            } else {
+                break; // No more keys to evict
+            }
+        }
+        Ok(())
+    }
+
+    /// Get configuration
+    pub fn config(&self) -> &StoreConfig {
+        &self.config
+    }
+
+    /// Update configuration (some settings may not apply retroactively)
+    pub fn set_config(&mut self, config: StoreConfig) {
+        info!("Updating KvStore configuration");
+        self.config = config;
     }
 }
 
