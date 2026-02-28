@@ -71,8 +71,10 @@ pub async fn set_value(
     req: web::Json<SetRequest>,
 ) -> impl Responder {
     let mut store = store.lock().unwrap();
-    store.set(key.to_string(), req.value.clone());
-    HttpResponse::Ok().body(format!("Set '{}' successfully", key))
+    match store.set(key.to_string(), req.value.clone()) {
+        Ok(_) => HttpResponse::Ok().body(format!("Set '{}' successfully", key)),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
 }
 
 // DELETE /api/keys/{key}
@@ -103,7 +105,7 @@ pub async fn incr_value(store: WebKvStore, key: web::Path<String>) -> impl Respo
     let mut store = store.lock().unwrap();
     match store.incr(&key) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
-        Err(e) => HttpResponse::BadRequest().body(e),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
 
@@ -112,7 +114,7 @@ pub async fn decr_value(store: WebKvStore, key: web::Path<String>) -> impl Respo
     let mut store = store.lock().unwrap();
     match store.decr(&key) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
-        Err(e) => HttpResponse::BadRequest().body(e),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
 
@@ -125,7 +127,7 @@ pub async fn incrby_value(
     let mut store = store.lock().unwrap();
     match store.incrby(&key, req.amount) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
-        Err(e) => HttpResponse::BadRequest().body(e),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
 
@@ -138,7 +140,7 @@ pub async fn append_value(
     let mut store = store.lock().unwrap();
     match store.append(&key, &req.value) {
         Ok(len) => HttpResponse::Ok().json(len),
-        Err(e) => HttpResponse::BadRequest().body(e),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
 
@@ -150,8 +152,9 @@ pub async fn getset_value(
 ) -> impl Responder {
     let mut store = store.lock().unwrap();
     match store.getset(key.to_string(), req.value.clone()) {
-        Some(old_val) => HttpResponse::Ok().json(old_val.to_string()),
-        None => HttpResponse::Ok().json(serde_json::Value::Null),
+        Ok(Some(old_val)) => HttpResponse::Ok().json(old_val.to_string()),
+        Ok(None) => HttpResponse::Ok().json(serde_json::Value::Null),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
 
@@ -174,8 +177,10 @@ pub async fn mset_values(store: WebKvStore, req: web::Json<MSetRequest>) -> impl
         .iter()
         .map(|kv| (kv.key.clone(), kv.value.clone()))
         .collect();
-    store.mset(pairs);
-    HttpResponse::Ok().body("OK")
+    match store.mset(pairs) {
+        Ok(_) => HttpResponse::Ok().body("OK"),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
 }
 
 // GET /api/exists/{key}

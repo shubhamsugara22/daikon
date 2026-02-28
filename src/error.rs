@@ -1,4 +1,3 @@
-use std::fmt;
 use thiserror::Error;
 
 /// Custom error types for KvStore operations

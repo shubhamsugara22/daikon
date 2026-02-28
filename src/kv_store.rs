@@ -10,7 +10,7 @@ use std::io::BufReader;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreStats {
@@ -233,94 +233,126 @@ impl KvStore {
 
     /// Increment an integer value atomically. Returns new value or error if key doesn't exist or isn't an integer.
     pub fn incr(&mut self, key: &str) -> Result<i64> {
-        match self.store.get_mut(key) {
+        let result = match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Int(ref mut val) = entry.value {
                     *val += 1;
                     self.stats.total_writes += 1;
-                    self.update_lru(&key.to_string());
-                    debug!("Incremented key '{}' to {}", key, *val);
-                    Ok(*val)
+                    let new_val = *val;
+                    debug!("Incremented key '{}' to {}", key, new_val);
+                    Ok(new_val)
                 } else {
-                    Err(KvStoreError::type_mismatch(
-                        key,
-                        "Int",
-                        self.get_type_name(&entry.value),
-                    ))
+                    let type_name = match &entry.value {
+                        Value::Str(_) => "Str",
+                        Value::Int(_) => "Int",
+                        Value::Float(_) => "Float",
+                        Value::Bool(_) => "Bool",
+                        Value::Json(_) => "Json",
+                    };
+                    Err(KvStoreError::type_mismatch(key, "Int", type_name))
                 }
             }
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
+        };
+
+        if result.is_ok() {
+            self.update_lru(&key.to_string());
         }
+        result
     }
 
     /// Decrement an integer value atomically. Returns new value or error.
     pub fn decr(&mut self, key: &str) -> Result<i64> {
-        match self.store.get_mut(key) {
+        let result = match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Int(ref mut val) = entry.value {
                     *val -= 1;
                     self.stats.total_writes += 1;
-                    self.update_lru(&key.to_string());
-                    debug!("Decremented key '{}' to {}", key, *val);
-                    Ok(*val)
+                    let new_val = *val;
+                    debug!("Decremented key '{}' to {}", key, new_val);
+                    Ok(new_val)
                 } else {
-                    Err(KvStoreError::type_mismatch(
-                        key,
-                        "Int",
-                        self.get_type_name(&entry.value),
-                    ))
+                    let type_name = match &entry.value {
+                        Value::Str(_) => "Str",
+                        Value::Int(_) => "Int",
+                        Value::Float(_) => "Float",
+                        Value::Bool(_) => "Bool",
+                        Value::Json(_) => "Json",
+                    };
+                    Err(KvStoreError::type_mismatch(key, "Int", type_name))
                 }
             }
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
+        };
+
+        if result.is_ok() {
+            self.update_lru(&key.to_string());
         }
+        result
     }
 
     /// Increment by a specific amount. Returns new value or error.
     pub fn incrby(&mut self, key: &str, amount: i64) -> Result<i64> {
-        match self.store.get_mut(key) {
+        let result = match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Int(ref mut val) = entry.value {
                     *val += amount;
                     self.stats.total_writes += 1;
-                    self.update_lru(&key.to_string());
-                    debug!("Incremented key '{}' by {} to {}", key, amount, *val);
-                    Ok(*val)
+                    let new_val = *val;
+                    debug!("Incremented key '{}' by {} to {}", key, amount, new_val);
+                    Ok(new_val)
                 } else {
-                    Err(KvStoreError::type_mismatch(
-                        key,
-                        "Int",
-                        self.get_type_name(&entry.value),
-                    ))
+                    let type_name = match &entry.value {
+                        Value::Str(_) => "Str",
+                        Value::Int(_) => "Int",
+                        Value::Float(_) => "Float",
+                        Value::Bool(_) => "Bool",
+                        Value::Json(_) => "Json",
+                    };
+                    Err(KvStoreError::type_mismatch(key, "Int", type_name))
                 }
             }
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
+        };
+
+        if result.is_ok() {
+            self.update_lru(&key.to_string());
         }
+        result
     }
 
     /// Append to a string value. Returns new length or error.
     pub fn append(&mut self, key: &str, value: &str) -> Result<usize> {
-        match self.store.get_mut(key) {
+        let result = match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::Str(ref mut s) = entry.value {
                     s.push_str(value);
                     self.stats.total_writes += 1;
-                    self.update_lru(&key.to_string());
-                    debug!("Appended to key '{}', new length: {}", key, s.len());
-                    Ok(s.len())
+                    let new_len = s.len();
+                    debug!("Appended to key '{}', new length: {}", key, new_len);
+                    Ok(new_len)
                 } else {
-                    Err(KvStoreError::type_mismatch(
-                        key,
-                        "Str",
-                        self.get_type_name(&entry.value),
-                    ))
+                    let type_name = match &entry.value {
+                        Value::Str(_) => "Str",
+                        Value::Int(_) => "Int",
+                        Value::Float(_) => "Float",
+                        Value::Bool(_) => "Bool",
+                        Value::Json(_) => "Json",
+                    };
+                    Err(KvStoreError::type_mismatch(key, "Str", type_name))
                 }
             }
             None => {
                 // If key doesn't exist, create it with the value
                 self.set(key.to_string(), value.to_string())?;
-                Ok(value.len())
+                return Ok(value.len());
             }
+        };
+
+        if result.is_ok() {
+            self.update_lru(&key.to_string());
         }
+        result
     }
 
     /// Get old value and set new value atomically.
@@ -422,7 +454,10 @@ impl KvStore {
     }
 
     /// Persist store to JSON file (overwrites).
-    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+    pub fn save_to_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let file = File::create(path)?;
         serde_json::to_writer_pretty(file, &self)?;
         Ok(())
@@ -452,10 +487,14 @@ impl KvStore {
     }
 
     /// Load store from JSON file.
-    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+    pub fn load_from_file<P: AsRef<Path>>(
+        path: P,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let store: KvStore = serde_json::from_reader(reader)?;
+        let mut store: KvStore = serde_json::from_reader(reader)?;
+        // Reinitialize transient fields
+        store.lru_order = store.store.keys().cloned().collect();
         Ok(store)
     }
     /// Save with backup/versioning:
@@ -466,7 +505,7 @@ impl KvStore {
         &self,
         path: P,
         max_versions: usize,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let path = path.as_ref();
 
         // If existing file present, create a timestamped backup next to it
@@ -557,16 +596,6 @@ impl KvStore {
             Value::Float(_) => 8,
             Value::Bool(_) => 1,
             Value::Json(j) => j.to_string().len(),
-        }
-    }
-
-    fn get_type_name(&self, value: &Value) -> String {
-        match value {
-            Value::Str(_) => "Str".to_string(),
-            Value::Int(_) => "Int".to_string(),
-            Value::Float(_) => "Float".to_string(),
-            Value::Bool(_) => "Bool".to_string(),
-            Value::Json(_) => "Json".to_string(),
         }
     }
 

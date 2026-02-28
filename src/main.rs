@@ -23,13 +23,15 @@ fn main() {
     }
 
     match cli.command {
-        Commands::Set { key, value } => {
-            store.set(key.clone(), value);
-            println!("Set '{}' successfully", key);
-        }
+        Commands::Set { key, value } => match store.set(key.clone(), value) {
+            Ok(_) => println!("Set '{}' successfully", key),
+            Err(e) => eprintln!("Error: {}", e),
+        },
         Commands::SetTTL { key, value, ttl } => {
-            store.set_with_ttl(key.clone(), value, Duration::from_secs(ttl));
-            println!("Set '{}' successfully with {}s TTL", key, ttl);
+            match store.set_with_ttl(key.clone(), value, Duration::from_secs(ttl)) {
+                Ok(_) => println!("Set '{}' successfully with {}s TTL", key, ttl),
+                Err(e) => eprintln!("Error: {}", e),
+            }
         }
         Commands::Get { key } => match store.get(&key) {
             Some(value) => println!("{}: {}", key, value),
@@ -75,12 +77,11 @@ fn main() {
             Ok(len) => println!("Appended to '{}', new length: {}", key, len),
             Err(e) => eprintln!("Error: {}", e),
         },
-        Commands::GetSet { key, value } => {
-            match store.getset(key.clone(), value.clone()) {
-                Some(old_val) => println!("Old value: {}, Set '{}' to '{}'", old_val, key, value),
-                None => println!("Key '{}' was not set, now set to '{}'", key, value),
-            }
-        }
+        Commands::GetSet { key, value } => match store.getset(key.clone(), value.clone()) {
+            Ok(Some(old_val)) => println!("Old value: {}, Set '{}' to '{}'", old_val, key, value),
+            Ok(None) => println!("Key '{}' was not set, now set to '{}'", key, value),
+            Err(e) => eprintln!("Error: {}", e),
+        },
         Commands::MGet { keys } => {
             let values = store.mget(&keys);
             for (key, value) in keys.iter().zip(values.iter()) {
@@ -98,8 +99,10 @@ fn main() {
                     .chunks(2)
                     .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
                     .collect();
-                store.mset(kv_pairs);
-                println!("Set {} key-value pairs", pairs.len() / 2);
+                match store.mset(kv_pairs) {
+                    Ok(_) => println!("Set {} key-value pairs", pairs.len() / 2),
+                    Err(e) => eprintln!("Error: {}", e),
+                }
             }
         }
         Commands::Exists { keys } => {
