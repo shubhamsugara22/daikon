@@ -6,15 +6,14 @@ use rust_kv_store::{
 };
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::EnvFilter;
 
 fn main() {
     // Initialize tracing subscriber for structured logging
     // Set RUST_LOG environment variable to control log level (e.g., RUST_LOG=debug)
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_target(false)
         .init();

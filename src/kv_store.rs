@@ -119,11 +119,6 @@ impl KvStore {
         let value = value.into();
         self.validate_value(&value)?;
 
-        // Check memory limits before insert
-        if self.config.max_memory_bytes > 0 && self.config.lru_eviction_enabled {
-            self.enforce_memory_limit()?;
-        }
-
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -138,6 +133,12 @@ impl KvStore {
         self.stats.total_writes += 1;
         self.stats.total_keys = self.store.len();
         self.stats.memory_bytes += value_size;
+
+        // Enforce memory limits after updating memory usage
+        if self.config.max_memory_bytes > 0 && self.config.lru_eviction_enabled {
+            self.enforce_memory_limit()?;
+        }
+
         debug!("Set key '{}' with TTL {:?}", key, ttl);
         Ok(())
     }
@@ -149,11 +150,6 @@ impl KvStore {
         self.validate_key(&key)?;
         let value = value.into();
         self.validate_value(&value)?;
-
-        // Check memory limits before insert
-        if self.config.max_memory_bytes > 0 && self.config.lru_eviction_enabled {
-            self.enforce_memory_limit()?;
-        }
 
         let value_size = self.estimate_value_size(&value);
         self.store.insert(
@@ -168,6 +164,12 @@ impl KvStore {
         self.stats.total_writes += 1;
         self.stats.total_keys = self.store.len();
         self.stats.memory_bytes += value_size;
+
+        // Enforce memory limits after updating memory usage
+        if self.config.max_memory_bytes > 0 && self.config.lru_eviction_enabled {
+            self.enforce_memory_limit()?;
+        }
+
         debug!("Set key '{}'", key);
         Ok(())
     }
