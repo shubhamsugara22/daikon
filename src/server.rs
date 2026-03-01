@@ -2,9 +2,20 @@ use actix_web::{web, App, HttpServer};
 use rust_kv_store::{api, kv_store::KvStore};
 use std::env;
 use std::sync::Mutex;
+use tracing_subscriber::EnvFilter;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // Initialize tracing subscriber for structured logging
+    // Set RUST_LOG environment variable to control log level (e.g., RUST_LOG=debug)
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"))
+        )
+        .with_target(false)
+        .init();
+
     let bind = env::var("KV_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let store = web::Data::new(Mutex::new(KvStore::new()));
 
