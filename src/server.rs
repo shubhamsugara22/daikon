@@ -39,15 +39,14 @@ async fn main() -> std::io::Result<()> {
     };
 
     let store = Arc::new(Mutex::new(kv_store));
-    let store_data = web::Data::new(Mutex::new(Arc::clone(&store)));
+    let store_for_shutdown = Arc::clone(&store);
+    let store_path_for_shutdown = store_path.clone();
 
     info!("Starting server at http://{}", bind);
 
     let server = HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(Mutex::new(Arc::clone(
-                &store.lock().unwrap(),
-            ))))
+            .app_data(web::Data::from(Arc::clone(&store)))
             .service(
                 web::scope("/api")
                     // Basic operations
@@ -75,8 +74,6 @@ async fn main() -> std::io::Result<()> {
     .run();
 
     let server_handle = server.handle();
-    let store_for_shutdown = Arc::clone(&store);
-    let store_path_for_shutdown = store_path.clone();
 
     // Spawn shutdown signal handler
     tokio::spawn(async move {
