@@ -66,7 +66,10 @@ fn main() {
         },
         Commands::Load => match KvStore::load_from_file(&file_path) {
             Ok(loaded_store) => {
-                store = loaded_store;
+                #[allow(unused_assignments)]
+                {
+                    store = loaded_store;
+                }
                 println!("Store loaded successfully from {:?}", file_path);
             }
             Err(e) => eprintln!("Error loading store: {}", e),
