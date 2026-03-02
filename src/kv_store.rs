@@ -174,8 +174,9 @@ impl KvStore {
         Ok(())
     }
     /// Generic set: accepts any type convertible into Value
-    pub fn get(&mut self, key: &str) -> Option<&Value> {
-        self.stats.total_reads += 1;
+    /// Pure read operation with no side effects (for concurrent read access)
+    /// Does NOT update statistics - this allows the operation to be lock-free
+    pub fn get(&self, key: &str) -> Option<&Value> {
         let result = self.store.get(key).and_then(|v| {
             if let Some(exp) = v.expires_at {
                 let now = SystemTime::now()
@@ -188,12 +189,6 @@ impl KvStore {
             }
             Some(&v.value)
         });
-
-        if result.is_some() {
-            self.stats.hits += 1;
-        } else {
-            self.stats.misses += 1;
-        }
         result
     }
 
@@ -380,12 +375,12 @@ impl KvStore {
     }
 
     /// Check if key exists and is not expired.
-    pub fn exists(&mut self, key: &str) -> bool {
+    pub fn exists(&self, key: &str) -> bool {
         self.get(key).is_some()
     }
 
     /// Check if multiple keys exist. Returns count of existing keys.
-    pub fn exists_many(&mut self, keys: &[String]) -> usize {
+    pub fn exists_many(&self, keys: &[String]) -> usize {
         keys.iter().filter(|k| self.exists(k)).count()
     }
 
