@@ -87,7 +87,7 @@ fn benchmark_memory_usage(c: &mut Criterion) {
             max_memory_bytes: 1_000_000, // 1MB
             max_value_size: 100_000,
             lru_eviction_enabled: true,
-            ..StoreConfig::from_default()
+            ..StoreConfig::default()
         };
         let mut store = KvStore::with_config(config);
 
