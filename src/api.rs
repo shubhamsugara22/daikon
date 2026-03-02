@@ -1,10 +1,10 @@
 use actix_web::{web, HttpResponse, Responder};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 
 use crate::kv_store::KvStore;
 
-pub type WebKvStore = web::Data<Mutex<KvStore>>;
+pub type WebKvStore = web::Data<RwLock<KvStore>>;
 
 #[derive(Deserialize)]
 pub struct SetRequest {
@@ -57,7 +57,7 @@ pub struct StatsResponse {
 
 // GET /api/keys/{key}
 pub async fn get_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let store = store.read(); // Read lock - allows concurrent reads
     match store.get(&key) {
         Some(value) => HttpResponse::Ok().json(value.to_string()),
         None => HttpResponse::NotFound().body(format!("Key '{}' not found", key)),
@@ -70,7 +70,7 @@ pub async fn set_value(
     key: web::Path<String>,
     req: web::Json<SetRequest>,
 ) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock - exclusive access for mutation
     match store.set(key.to_string(), req.value.clone()) {
         Ok(_) => HttpResponse::Ok().body(format!("Set '{}' successfully", key)),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -79,7 +79,7 @@ pub async fn set_value(
 
 // DELETE /api/keys/{key}
 pub async fn delete_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock - exclusive access for mutation
     match store.delete(&key) {
         Some(_) => HttpResponse::Ok().body(format!("Deleted '{}' successfully", key)),
         None => HttpResponse::NotFound().body(format!("Key '{}' not found", key)),
@@ -88,7 +88,7 @@ pub async fn delete_value(store: WebKvStore, key: web::Path<String>) -> impl Res
 
 // GET /api/keys
 pub async fn list_keys(store: WebKvStore) -> impl Responder {
-    let store = store.lock().unwrap();
+    let store = store.read(); // Read lock
     let mut keys = Vec::new();
     let mut values = Vec::new();
 
@@ -102,7 +102,7 @@ pub async fn list_keys(store: WebKvStore) -> impl Responder {
 
 // POST /api/incr/{key}
 pub async fn incr_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock
     match store.incr(&key) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -111,7 +111,7 @@ pub async fn incr_value(store: WebKvStore, key: web::Path<String>) -> impl Respo
 
 // POST /api/decr/{key}
 pub async fn decr_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock
     match store.decr(&key) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -124,7 +124,7 @@ pub async fn incrby_value(
     key: web::Path<String>,
     req: web::Json<IncrByRequest>,
 ) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock
     match store.incrby(&key, req.amount) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -137,7 +137,7 @@ pub async fn append_value(
     key: web::Path<String>,
     req: web::Json<AppendRequest>,
 ) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock
     match store.append(&key, &req.value) {
         Ok(len) => HttpResponse::Ok().json(len),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -150,7 +150,7 @@ pub async fn getset_value(
     key: web::Path<String>,
     req: web::Json<SetRequest>,
 ) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock
     match store.getset(key.to_string(), req.value.clone()) {
         Ok(Some(old_val)) => HttpResponse::Ok().json(old_val.to_string()),
         Ok(None) => HttpResponse::Ok().json(serde_json::Value::Null),
@@ -160,7 +160,7 @@ pub async fn getset_value(
 
 // POST /api/mget
 pub async fn mget_values(store: WebKvStore, req: web::Json<MGetRequest>) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock (tracks read stats)
     let values = store.mget(&req.keys);
     let result: Vec<Option<String>> = values
         .iter()
@@ -171,7 +171,7 @@ pub async fn mget_values(store: WebKvStore, req: web::Json<MGetRequest>) -> impl
 
 // POST /api/mset
 pub async fn mset_values(store: WebKvStore, req: web::Json<MSetRequest>) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock
     let pairs: Vec<(String, String)> = req
         .pairs
         .iter()
@@ -185,21 +185,21 @@ pub async fn mset_values(store: WebKvStore, req: web::Json<MSetRequest>) -> impl
 
 // GET /api/exists/{key}
 pub async fn exists_key(store: WebKvStore, key: web::Path<String>) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let store = store.read(); // Read lock
     let exists = store.exists(&key);
     HttpResponse::Ok().json(exists)
 }
 
 // GET /api/keys/pattern/{pattern}
 pub async fn keys_pattern(store: WebKvStore, pattern: web::Path<String>) -> impl Responder {
-    let store = store.lock().unwrap();
+    let store = store.read(); // Read lock
     let keys = store.keys(&pattern);
     HttpResponse::Ok().json(keys)
 }
 
 // GET /api/stats
 pub async fn get_stats(store: WebKvStore) -> impl Responder {
-    let store = store.lock().unwrap();
+    let store = store.read(); // Read lock
     let stats = store.stats();
     let hit_rate = if stats.total_reads > 0 {
         (stats.hits as f64 / stats.total_reads as f64) * 100.0
@@ -221,7 +221,7 @@ pub async fn get_stats(store: WebKvStore) -> impl Responder {
 
 // POST /api/cleanup
 pub async fn cleanup_expired(store: WebKvStore) -> impl Responder {
-    let mut store = store.lock().unwrap();
+    let mut store = store.write(); // Write lock
     let removed = store.cleanup_expired();
     HttpResponse::Ok().json(removed)
 }
