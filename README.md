@@ -177,7 +177,7 @@ rust-kv-store/
 - ✅ Input validation (keys, values, config)
 - ✅ Memory management with LRU eviction
 - ✅ Structured logging with tracing
-- ✅ Comprehensive test suite (21 tests, 100% passing)
+- ✅ Comprehensive test suite (23 tests total: 4 unit + 19 integration, 100% passing)
 - ✅ Graceful shutdown with persistence
 
 ### Phase 2: Performance & Scalability (Planned)
@@ -215,9 +215,9 @@ rust-kv-store/
 - Configurable backup retention
 
 ### Concurrency
-- `Mutex`-protected shared state for API
+- `parking_lot::RwLock` for API shared state (read-heavy optimization)
+- `Mutex` still used in server startup path (partial migration)
 - Thread-safe atomic operations
-- Lock-free reads where possible
 
 ## 📊 Statistics Example
 
@@ -310,7 +310,7 @@ cargo test -- --nocapture
 # Run specific test
 cargo test test_memory_limit_enforcement
 
-# Expected output: 19 passed; 0 failed
+# Expected output includes all test groups (23 tests total)
 ```
 
 ## 🎓 Use Cases
@@ -321,33 +321,6 @@ cargo test test_memory_limit_enforcement
 - **Configuration Store**: Dynamic application configuration
 - **Rate Limiting**: Token bucket implementation with INCR/DECR
 - **Analytics**: Real-time metrics aggregation
-
-## �️ Roadmap
-
-### Phase 1 ✅ COMPLETE
-- [x] Custom error types and error handling
-- [x] Input validation (keys, values, configuration)
-- [x] Memory limits with LRU eviction
-- [x] Structured logging with tracing
-- [x] Comprehensive test suite (19 tests)
-- [x] Graceful shutdown with persistence
-
-### Phase 2 (Planned)
-- [ ] Replication & clustering
-- [ ] Pub/Sub messaging system
-- [ ] Expiring key background job optimization
-- [ ] Key data structure types (Lists, Sets, Hashes)
-- [ ] Transactions and multi-key operations
-- [ ] Key encryption at rest
-- [ ] Snapshot-based backup system
-- [x] Performance benchmarking suite
-
-### Phase 3 (Future)
-- [ ] Distributed consensus (Raft)
-- [ ] Master-slave failover
-- [ ] Monitoring and alerting
-- [ ] Web UI dashboard
-- [ ] Client SDK libraries
 
 ## �🚀 Performance
 
