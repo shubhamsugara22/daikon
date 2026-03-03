@@ -181,9 +181,9 @@ rust-kv-store/
 - ✅ Graceful shutdown with persistence
 
 ### Phase 2: Performance & Scalability (Planned)
-- [ ] **Concurrent Read Optimization**: RwLock or parking_lot for read-heavy workloads
+- [ ] **Concurrent Read Optimization**: Partial (API uses `parking_lot::RwLock`; server path still uses `Mutex`)
 - [ ] **Batch Write Optimization**: Transaction-like operations for atomic multi-key updates
-- [ ] **Performance Benchmarks**: Throughput and latency metrics
+- [x] **Performance Benchmarks**: Throughput and latency metrics
 - [ ] **Memory Optimization**: Zero-copy operations, custom allocators
 - [ ] **Benchmarking CLI**: Performance testing tool
 
@@ -340,7 +340,7 @@ cargo test test_memory_limit_enforcement
 - [ ] Transactions and multi-key operations
 - [ ] Key encryption at rest
 - [ ] Snapshot-based backup system
-- [ ] Performance benchmarking suite
+- [x] Performance benchmarking suite
 
 ### Phase 3 (Future)
 - [ ] Distributed consensus (Raft)
