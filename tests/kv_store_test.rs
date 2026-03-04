@@ -316,3 +316,121 @@ fn test_stats_tracking() {
     assert_eq!(stats.total_keys, 2);
     assert_eq!(stats.total_writes, 2);
 }
+
+#[test]
+fn test_transaction_multi_exec_queues_and_commits() {
+    let mut store = KvStore::new();
+
+    store.multi().expect("failed to start transaction");
+    store
+        .set("k1".to_string(), "v1".to_string())
+        .expect("failed to queue set k1");
+    store
+        .set("k2".to_string(), "v2".to_string())
+        .expect("failed to queue set k2");
+
+    assert!(store.in_transaction());
+    assert_eq!(
+        store.get("k1"),
+        None,
+        "queued write should not be visible before EXEC"
+    );
+    assert_eq!(
+        store.get("k2"),
+        None,
+        "queued write should not be visible before EXEC"
+    );
+
+    let results = store.exec().expect("failed to exec transaction");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0], "OK");
+    assert_eq!(results[1], "OK");
+    assert!(!store.in_transaction());
+
+    assert_eq!(store.get("k1"), Some(&Value::Str("v1".to_string())));
+    assert_eq!(store.get("k2"), Some(&Value::Str("v2".to_string())));
+}
+
+#[test]
+fn test_transaction_discard_rolls_back_queued_writes() {
+    let mut store = KvStore::new();
+
+    store.multi().expect("failed to start transaction");
+    store
+        .set("temp".to_string(), "value".to_string())
+        .expect("failed to queue set");
+
+    assert_eq!(
+        store.get("temp"),
+        None,
+        "queued write should not be visible before DISCARD"
+    );
+
+    store.discard().expect("failed to discard transaction");
+    assert!(!store.in_transaction());
+    assert_eq!(
+        store.get("temp"),
+        None,
+        "discarded transaction should not persist queued write"
+    );
+}
+
+#[test]
+fn test_transaction_delete_exec_applies_removal() {
+    let mut store = KvStore::new();
+    store
+        .set("to_delete".to_string(), "keep-until-exec".to_string())
+        .expect("failed initial set");
+
+    store.multi().expect("failed to start transaction");
+    let queued_old = store.delete("to_delete");
+    assert_eq!(
+        queued_old,
+        Some(Value::Str("keep-until-exec".to_string())),
+        "delete should return current value even when queued"
+    );
+
+    assert_eq!(
+        store.get("to_delete"),
+        Some(&Value::Str("keep-until-exec".to_string())),
+        "delete should not apply before EXEC"
+    );
+
+    let results = store.exec().expect("failed to exec transaction");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0], "OK");
+    assert_eq!(
+        store.get("to_delete"),
+        None,
+        "key should be deleted after EXEC"
+    );
+}
+
+#[test]
+fn test_transaction_set_with_ttl_applies_on_exec() {
+    use std::time::Duration;
+
+    let mut store = KvStore::new();
+    store.multi().expect("failed to start transaction");
+    store
+        .set_with_ttl(
+            "ttl_key".to_string(),
+            "ttl_value".to_string(),
+            Duration::from_secs(60),
+        )
+        .expect("failed to queue set_with_ttl");
+
+    assert_eq!(
+        store.get("ttl_key"),
+        None,
+        "ttl key should not be visible before EXEC"
+    );
+
+    let results = store.exec().expect("failed to exec transaction");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0], "OK");
+    assert_eq!(
+        store.get("ttl_key"),
+        Some(&Value::Str("ttl_value".to_string()))
+    );
+}
