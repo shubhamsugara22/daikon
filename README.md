@@ -2,7 +2,7 @@
 
 A high-performance, feature-rich in-memory key-value store written in Rust with both CLI and REST API interfaces.
 
-## �️ Production Readiness (Phase 1 ✅)
+## Production Readiness (Phase 1 ✅)
 
 ### Error Handling
 - **Custom Error Types**: Typed error handling with `KvStoreError` enum
@@ -322,7 +322,7 @@ cargo test test_memory_limit_enforcement
 - **Rate Limiting**: Token bucket implementation with INCR/DECR
 - **Analytics**: Real-time metrics aggregation
 
-## �🚀 Performance
+## Performance
 
 - In-memory storage for sub-millisecond latency
 - Zero-copy operations where possible
