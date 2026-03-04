@@ -5,6 +5,7 @@ use rust_kv_store::{
     kv_store::KvStore,
 };
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
@@ -150,6 +151,34 @@ fn main() {
         Commands::Cleanup => {
             let removed = store.cleanup_expired();
             println!("Cleaned up {} expired keys", removed);
+        }
+        Commands::Multi => match store.multi() {
+            Ok(_) => println!("Transaction started (MULTI)"),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::Exec => match store.exec() {
+            Ok(results) => {
+                println!("Executed {} commands:", results.len());
+                for (i, result) in results.iter().enumerate() {
+                    println!("  {}: {}", i + 1, result);
+                }
+            }
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::Discard => match store.discard() {
+            Ok(_) => println!("Transaction discarded"),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::Benchmark => {
+            println!("Running performance benchmarks...");
+            match Command::new("cargo")
+                .args(["bench", "--bench", "performance", "--", "--quiet"])
+                .status()
+            {
+                Ok(status) if status.success() => println!("Benchmark completed successfully"),
+                Ok(status) => eprintln!("Benchmark failed with exit code: {:?}", status.code()),
+                Err(e) => eprintln!("Failed to execute benchmark: {}", e),
+            }
         }
     }
 

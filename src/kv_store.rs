@@ -25,6 +25,38 @@ pub struct StoreStats {
     pub evictions: u64,
 }
 
+/// Detailed memory usage breakdown
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryProfile {
+    pub total_bytes: usize,
+    pub key_bytes: usize,
+    pub value_bytes: usize,
+    pub string_values: usize,
+    pub int_values: usize,
+    pub float_values: usize,
+    pub bool_values: usize,
+    pub json_values: usize,
+    pub ttl_entries: usize,
+    pub heap_fragmentation_ratio: f64,
+}
+
+impl Default for MemoryProfile {
+    fn default() -> Self {
+        Self {
+            total_bytes: 0,
+            key_bytes: 0,
+            value_bytes: 0,
+            string_values: 0,
+            int_values: 0,
+            float_values: 0,
+            bool_values: 0,
+            json_values: 0,
+            ttl_entries: 0,
+            heap_fragmentation_ratio: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValueWithTTL {
     pub value: Value,
@@ -86,6 +118,18 @@ impl From<JsonValue> for Value {
         Value::Json(j)
     }
 }
+
+/// Transaction operation for MULTI/EXEC support
+#[derive(Debug, Clone)]
+pub enum TransactionOp {
+    Set(String, Value, Option<u64>), // key, value, expires_at
+    Delete(String),                  // key
+    Incr(String),
+    Decr(String),
+    IncrBy(String, i64),
+    Append(String, String),
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct KvStore {
     store: HashMap<String, ValueWithTTL>,
@@ -95,6 +139,8 @@ pub struct KvStore {
     config: StoreConfig,
     #[serde(skip)]
     lru_order: Vec<String>,
+    #[serde(skip)]
+    transaction_queue: Option<Vec<TransactionOp>>,
 }
 
 impl KvStore {
@@ -109,6 +155,7 @@ impl KvStore {
             stats: StoreStats::default(),
             config,
             lru_order: Vec::new(),
+            transaction_queue: None,
         }
     }
     pub fn set_with_ttl<V>(&mut self, key: String, value: V, ttl: Duration) -> Result<()>
@@ -124,6 +171,11 @@ impl KvStore {
             .unwrap_or_default()
             .as_secs();
         let expires_at = now.checked_add(ttl.as_secs());
+
+        if self.in_transaction() {
+            self.queue_operation(TransactionOp::Set(key, value, expires_at))?;
+            return Ok(());
+        }
 
         let value_size = self.estimate_value_size(&value);
         self.store
@@ -150,6 +202,11 @@ impl KvStore {
         self.validate_key(&key)?;
         let value = value.into();
         self.validate_value(&value)?;
+
+        if self.in_transaction() {
+            self.queue_operation(TransactionOp::Set(key, value, None))?;
+            return Ok(());
+        }
 
         let value_size = self.estimate_value_size(&value);
         self.store.insert(
@@ -219,6 +276,12 @@ impl KvStore {
     }
 
     pub fn delete(&mut self, key: &str) -> Option<Value> {
+        if self.in_transaction() {
+            let prior = self.store.get(key).map(|v| v.value.clone());
+            let _ = self.queue_operation(TransactionOp::Delete(key.to_string()));
+            return prior;
+        }
+
         let result = self.store.remove(key).map(|v| v.value);
         if result.is_some() {
             self.stats.total_deletes += 1;
@@ -368,6 +431,15 @@ impl KvStore {
 
     /// Set multiple key-value pairs at once.
     pub fn mset(&mut self, pairs: Vec<(String, String)>) -> Result<()> {
+        if self.in_transaction() {
+            for (key, value) in pairs {
+                self.validate_key(&key)?;
+                self.validate_value(&Value::Str(value.clone()))?;
+                self.queue_operation(TransactionOp::Set(key, Value::Str(value), None))?;
+            }
+            return Ok(());
+        }
+
         for (key, value) in pairs {
             self.set(key, value)?;
         }
@@ -448,6 +520,57 @@ impl KvStore {
 
         self.stats.expired_keys += count;
         count
+    }
+
+    /// Get detailed memory profile showing breakdown by value type
+    pub fn memory_profile(&self) -> MemoryProfile {
+        let mut profile = MemoryProfile::default();
+
+        for (key, entry) in &self.store {
+            // Count key memory
+            profile.key_bytes += key.len();
+
+            // Count value memory by type
+            match &entry.value {
+                Value::Str(s) => {
+                    profile.value_bytes += s.len();
+                    profile.string_values += 1;
+                }
+                Value::Int(_) => {
+                    profile.value_bytes += 8; // 64-bit integer
+                    profile.int_values += 1;
+                }
+                Value::Float(_) => {
+                    profile.value_bytes += 8; // 64-bit float
+                    profile.float_values += 1;
+                }
+                Value::Bool(_) => {
+                    profile.value_bytes += 1;
+                    profile.bool_values += 1;
+                }
+                Value::Json(j) => {
+                    profile.value_bytes += j.to_string().len();
+                    profile.json_values += 1;
+                }
+            }
+
+            // Count TTL entries
+            if entry.expires_at.is_some() {
+                profile.ttl_entries += 8; // 64-bit timestamp
+            }
+        }
+
+        // Calculate total and fragmentation ratio
+        profile.total_bytes = profile.key_bytes + profile.value_bytes + profile.ttl_entries;
+        // Simple fragmentation estimate: empty slots in HashMap capacity
+        let capacity = self.store.capacity();
+        let len = self.store.len();
+        if capacity > 0 {
+            profile.heap_fragmentation_ratio = (capacity - len) as f64 / capacity as f64;
+        }
+        profile.total_bytes = self.stats.memory_bytes; // Use actual tracked memory
+
+        profile
     }
 
     /// Persist store to JSON file (overwrites).
@@ -636,6 +759,167 @@ impl KvStore {
     pub fn set_config(&mut self, config: StoreConfig) {
         info!("Updating KvStore configuration");
         self.config = config;
+    }
+
+    /// Start a transaction (MULTI command)
+    pub fn multi(&mut self) -> Result<()> {
+        if self.transaction_queue.is_some() {
+            return Err(KvStoreError::OperationFailed(
+                "Transaction already in progress".to_string(),
+            ));
+        }
+        self.transaction_queue = Some(Vec::new());
+        info!("Transaction started");
+        Ok(())
+    }
+
+    /// Execute all queued operations atomically (EXEC command)
+    pub fn exec(&mut self) -> Result<Vec<String>> {
+        let queue = match self.transaction_queue.take() {
+            Some(q) => q,
+            None => {
+                return Err(KvStoreError::OperationFailed(
+                    "No transaction in progress".to_string(),
+                ))
+            }
+        };
+
+        let mut results = Vec::new();
+        for op in queue {
+            match op {
+                TransactionOp::Set(key, value, expires_at) => {
+                    let value_with_ttl = ValueWithTTL {
+                        value: value.clone(),
+                        expires_at,
+                    };
+                    self.store.insert(key.clone(), value_with_ttl);
+                    self.stats.total_writes += 1;
+                    results.push(format!("OK"));
+                    self.update_lru(&key);
+                }
+                TransactionOp::Delete(key) => {
+                    self.store.remove(&key);
+                    self.stats.total_deletes += 1;
+                    results.push(format!("OK"));
+                }
+                TransactionOp::Incr(key) => {
+                    if let Some(entry) = self.store.get_mut(&key) {
+                        if let Value::Int(i) = &mut entry.value {
+                            *i += 1;
+                            results.push(format!("{}", i));
+                        } else {
+                            results.push(format!("ERR: Type mismatch"));
+                        }
+                    } else {
+                        self.store.insert(
+                            key.clone(),
+                            ValueWithTTL {
+                                value: Value::Int(1),
+                                expires_at: None,
+                            },
+                        );
+                        results.push(format!("1"));
+                    }
+                    self.stats.total_writes += 1;
+                    self.update_lru(&key);
+                }
+                TransactionOp::Decr(key) => {
+                    if let Some(entry) = self.store.get_mut(&key) {
+                        if let Value::Int(i) = &mut entry.value {
+                            *i -= 1;
+                            results.push(format!("{}", i));
+                        } else {
+                            results.push(format!("ERR: Type mismatch"));
+                        }
+                    } else {
+                        self.store.insert(
+                            key.clone(),
+                            ValueWithTTL {
+                                value: Value::Int(-1),
+                                expires_at: None,
+                            },
+                        );
+                        results.push(format!("-1"));
+                    }
+                    self.stats.total_writes += 1;
+                    self.update_lru(&key);
+                }
+                TransactionOp::IncrBy(key, amount) => {
+                    if let Some(entry) = self.store.get_mut(&key) {
+                        if let Value::Int(i) = &mut entry.value {
+                            *i += amount;
+                            results.push(format!("{}", i));
+                        } else {
+                            results.push(format!("ERR: Type mismatch"));
+                        }
+                    } else {
+                        self.store.insert(
+                            key.clone(),
+                            ValueWithTTL {
+                                value: Value::Int(amount),
+                                expires_at: None,
+                            },
+                        );
+                        results.push(format!("{}", amount));
+                    }
+                    self.stats.total_writes += 1;
+                    self.update_lru(&key);
+                }
+                TransactionOp::Append(key, s) => {
+                    if let Some(entry) = self.store.get_mut(&key) {
+                        if let Value::Str(ref mut string) = &mut entry.value {
+                            string.push_str(&s);
+                            results.push(format!("OK"));
+                        } else {
+                            results.push(format!("ERR: Type mismatch"));
+                        }
+                    } else {
+                        self.store.insert(
+                            key.clone(),
+                            ValueWithTTL {
+                                value: Value::Str(s.clone()),
+                                expires_at: None,
+                            },
+                        );
+                        results.push(format!("OK"));
+                    }
+                    self.stats.total_writes += 1;
+                    self.update_lru(&key);
+                }
+            }
+        }
+        info!("Transaction executed with {} operations", results.len());
+        Ok(results)
+    }
+
+    /// Discard transaction (DISCARD command)
+    pub fn discard(&mut self) -> Result<()> {
+        if self.transaction_queue.is_none() {
+            return Err(KvStoreError::OperationFailed(
+                "No transaction in progress".to_string(),
+            ));
+        }
+        self.transaction_queue = None;
+        info!("Transaction discarded");
+        Ok(())
+    }
+
+    /// Queue an operation in the current transaction
+    pub fn queue_operation(&mut self, op: TransactionOp) -> Result<()> {
+        match &mut self.transaction_queue {
+            Some(queue) => {
+                queue.push(op);
+                Ok(())
+            }
+            None => Err(KvStoreError::OperationFailed(
+                "No transaction in progress".to_string(),
+            )),
+        }
+    }
+
+    /// Check if currently in a transaction
+    pub fn in_transaction(&self) -> bool {
+        self.transaction_queue.is_some()
     }
 }
 

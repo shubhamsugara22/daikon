@@ -225,3 +225,38 @@ pub async fn cleanup_expired(store: WebKvStore) -> impl Responder {
     let removed = store.cleanup_expired();
     HttpResponse::Ok().json(removed)
 }
+// POST /api/multi
+pub async fn multi(store: WebKvStore) -> impl Responder {
+    let mut store = store.write(); // Write lock
+    match store.multi() {
+        Ok(_) => HttpResponse::Ok()
+            .json(serde_json::json!({"status": "OK", "message": "Transaction started"})),
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e.to_string()})),
+    }
+}
+
+// POST /api/exec
+pub async fn exec(store: WebKvStore) -> impl Responder {
+    let mut store = store.write(); // Write lock
+    match store.exec() {
+        Ok(results) => HttpResponse::Ok().json(serde_json::json!({"results": results})),
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e.to_string()})),
+    }
+}
+
+// POST /api/discard
+pub async fn discard(store: WebKvStore) -> impl Responder {
+    let mut store = store.write(); // Write lock
+    match store.discard() {
+        Ok(_) => HttpResponse::Ok()
+            .json(serde_json::json!({"status": "OK", "message": "Transaction discarded"})),
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e.to_string()})),
+    }
+}
+
+// GET /api/memory
+pub async fn get_memory_profile(store: WebKvStore) -> impl Responder {
+    let store = store.read(); // Read lock
+    let profile = store.memory_profile();
+    HttpResponse::Ok().json(profile)
+}

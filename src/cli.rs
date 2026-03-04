@@ -56,4 +56,12 @@ pub enum Commands {
     Stats,
     /// Clean up expired keys
     Cleanup,
+    /// Start a transaction (MULTI command)
+    Multi,
+    /// Execute all queued transaction operations (EXEC command)
+    Exec,
+    /// Discard an ongoing transaction (DISCARD command)
+    Discard,
+    /// Run performance benchmark suite
+    Benchmark,
 }

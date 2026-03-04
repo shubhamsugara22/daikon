@@ -51,7 +51,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
   - Stats tracking and accuracy
   - Persistence (save/load/versioning)
 
-## 📊 Features Status
+## Features Status
 
 ### Core Operations
 - ✅ **Multiple Data Types**: String, Integer, Float, Boolean, JSON
@@ -69,7 +69,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - 🌐 **REST API**: HTTP server with comprehensive endpoints
 - 📊 **Monitoring**: Real-time statistics and metrics
 
-## 📦 Installation
+## Installation
 
 ```bash
 git clone <repository>
@@ -77,7 +77,7 @@ cd rust-kv-store
 cargo build --release
 ```
 
-## 🎯 Quick Start
+## Quick Start
 
 ### CLI Usage
 
@@ -149,11 +149,11 @@ curl http://localhost:8080/api/stats
 curl http://localhost:8080/api/keys/pattern/user:*
 ```
 
-## 📖 Documentation
+## Documentation
 
 For detailed feature documentation and examples, see [FEATURES.md](FEATURES.md).
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 rust-kv-store/
@@ -170,7 +170,7 @@ rust-kv-store/
 └── README.md         # This file
 ```
 
-## 📋 Roadmap
+## Roadmap
 
 ### Phase 1: Production Hardening ✅ COMPLETE
 - ✅ Custom error types and error handling
@@ -201,7 +201,7 @@ rust-kv-store/
 - [ ] **Stream Data Type**: Time-series data support
 - [ ] **HyperLogLog**: Cardinality estimation
 
-## 🔧 Technical Details
+## Technical Details
 
 ### Data Structure
 - **Store**: `HashMap<String, ValueWithTTL>`
@@ -219,7 +219,7 @@ rust-kv-store/
 - `Mutex` still used in server startup path (partial migration)
 - Thread-safe atomic operations
 
-## 📊 Statistics Example
+## Statistics Example
 
 ```bash
 $ cargo run -- stats
@@ -234,7 +234,7 @@ Cache misses: 50
 Hit rate: 95.00%
 ```
 
-## 🛡️ Phase 1: Production Readiness ✅
+## Phase 1: Production Readiness ✅
 
 The following production hardening features have been implemented and fully tested:
 
@@ -298,7 +298,7 @@ The following production hardening features have been implemented and fully test
 
 **Status**: Phase 1 complete and production-ready! ✅
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run all tests
@@ -313,7 +313,7 @@ cargo test test_memory_limit_enforcement
 # Expected output includes all test groups (23 tests total)
 ```
 
-## 🎓 Use Cases
+## Use Cases
 
 - **Session Management**: TTL-based session storage
 - **Caching Layer**: High-performance cache with hit rate tracking
@@ -330,16 +330,16 @@ cargo test test_memory_limit_enforcement
 - Batch operations to reduce overhead
 - Stats tracking with minimal overhead
 
-## 📚 Reference
+## Reference
 
 Based on system design concepts from:
 - [Building an In-Memory Key-Value Store](https://geekpaul.medium.com/system-design-building-an-in-memory-key-value-store-js-4d3aa9aec31c)
 - [Design a Key-Value Store](https://bytebytego.com/courses/system-design-interview/design-a-key-value-store)
 
-## 🤝 Contributing
+## Contributing
 
 This is a proof-of-concept project for learning system design and Rust. Feel free to fork and extend!
 
-## 📄 License
+## License
 
 MIT

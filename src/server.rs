@@ -1,8 +1,9 @@
 use actix_web::{web, App, HttpServer};
+use parking_lot::RwLock;
 use rust_kv_store::{api, kv_store::KvStore};
 use std::env;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -38,7 +39,7 @@ async fn main() -> std::io::Result<()> {
         KvStore::new()
     };
 
-    let store = Arc::new(Mutex::new(kv_store));
+    let store = Arc::new(RwLock::new(kv_store));
     let store_for_shutdown = Arc::clone(&store);
     let store_path_for_shutdown = store_path.clone();
 
@@ -67,7 +68,12 @@ async fn main() -> std::io::Result<()> {
                     // Pattern matching & stats
                     .route("/keys/pattern/{pattern}", web::get().to(api::keys_pattern))
                     .route("/stats", web::get().to(api::get_stats))
-                    .route("/cleanup", web::post().to(api::cleanup_expired)),
+                    .route("/cleanup", web::post().to(api::cleanup_expired))
+                    .route("/memory", web::get().to(api::get_memory_profile))
+                    // Transactions
+                    .route("/multi", web::post().to(api::multi))
+                    .route("/exec", web::post().to(api::exec))
+                    .route("/discard", web::post().to(api::discard)),
             )
     })
     .bind(&bind)?
@@ -80,8 +86,9 @@ async fn main() -> std::io::Result<()> {
         shutdown_signal().await;
         info!("Shutdown signal received, saving store...");
 
-        // Save store before shutdown
-        if let Ok(store_guard) = store_for_shutdown.lock() {
+        // Save store before shutdown (scope ensures guard is dropped before await)
+        {
+            let store_guard = store_for_shutdown.read();
             match store_guard.save_with_version(&store_path_for_shutdown, 5) {
                 Ok(_) => info!("Store saved successfully to {:?}", store_path_for_shutdown),
                 Err(e) => error!("Failed to save store: {}", e),
