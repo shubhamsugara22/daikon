@@ -40,7 +40,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **21 Total Tests**: 2 integration + 19 core functionality tests
+- **28 Total Tests**: 23 integration tests + 5 API endpoint tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -48,6 +48,8 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
   - Type safety (type mismatch errors)
   - Atomic operations (incr/decr/append/incrby/getset)
   - Batch operations (mset/mget)
+  - Transaction support (MULTI/EXEC/DISCARD with operation queueing)
+  - API endpoints (REST/HTTP integration testing)
   - Stats tracking and accuracy
   - Persistence (save/load/versioning)
 
@@ -177,15 +179,16 @@ rust-kv-store/
 - ✅ Input validation (keys, values, config)
 - ✅ Memory management with LRU eviction
 - ✅ Structured logging with tracing
-- ✅ Comprehensive test suite (23 tests total: 4 unit + 19 integration, 100% passing)
+- ✅ Comprehensive test suite (28 tests total: 23 integration + 5 API tests, 100% passing)
 - ✅ Graceful shutdown with persistence
 
-### Phase 2: Performance & Scalability (Planned)
+### Phase 2: Performance & Scalability ✅ COMPLETE
 - [x] **Concurrent Read Optimization**: API and server both use `parking_lot::RwLock`
 - [x] **Batch Write Optimization**: MULTI/EXEC/DISCARD transaction flow for atomic queued writes
 - [x] **Performance Benchmarks**: Throughput and latency metrics
 - [x] **Memory Optimization**: Memory profiling endpoint and detailed usage breakdown by type
 - [x] **Benchmarking CLI**: `benchmark` command to run performance suite
+- [x] **Comprehensive Testing**: 5 new API integration tests for transaction endpoints
 
 ### Phase 3: Persistence & Durability (Planned)
 - [ ] **Write-Ahead Logging**: Transaction log for crash recovery
@@ -285,12 +288,14 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
-- **19 Integration Tests**: All passing with 100% success rate
+- **28 Total Tests**: 23 integration tests + 5 API endpoint tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
   - Type safety (mismatch detection)
   - Atomic operations (incr/decr/append/getset)
+  - Transaction operations (MULTI/EXEC/DISCARD)
+  - API endpoints (REST interface testing)
   - Batch operations (mset/mget)
   - Configuration validation
   - Statistics tracking
