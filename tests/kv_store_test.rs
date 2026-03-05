@@ -69,7 +69,7 @@ fn test_save_and_load() {
     store.save_to_file(&path).expect("save failed");
 
     // load
-    let mut loaded = KvStore::load_from_file(&path).expect("load failed");
+    let loaded = KvStore::load_from_file(&path).expect("load failed");
 
     // assertions
     assert_eq!(loaded.get("k1"), Some(&Value::Str("v1".to_string())));
