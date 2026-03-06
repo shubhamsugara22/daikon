@@ -61,19 +61,15 @@ impl Wal {
     /// Create or open a WAL at the specified path
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        
+
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                KvStoreError::IoError(format!("Failed to create WAL directory: {}", e))
-            })?;
+            std::fs::create_dir_all(parent)?;
         }
 
         // Ensure the file exists
         if !path.exists() {
-            std::fs::File::create(&path).map_err(|e| {
-                KvStoreError::IoError(format!("Failed to create WAL file: {}", e))
-            })?;
+            std::fs::File::create(&path)?;
         }
 
         info!("Initialized WAL at: {}", path.display());
@@ -82,16 +78,12 @@ impl Wal {
 
     /// Append a WAL entry to the log file
     pub fn append(&self, entry: &WalEntry) -> Result<()> {
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&self.path)
-            .map_err(|e| KvStoreError::IoError(format!("Failed to open WAL file: {}", e)))?;
+        let mut file = OpenOptions::new().append(true).open(&self.path)?;
 
-        let json_line = serde_json::to_string(entry)
-            .map_err(|e| KvStoreError::SerializationError(e.to_string()))?;
+        let json_line =
+            serde_json::to_string(entry).map_err(|e| KvStoreError::SerializationError(e))?;
 
-        writeln!(file, "{}", json_line)
-            .map_err(|e| KvStoreError::IoError(format!("Failed to write to WAL: {}", e)))?;
+        writeln!(file, "{}", json_line).map_err(KvStoreError::IoError)?;
 
         debug!("WAL entry logged: {:?}", entry.operation);
         Ok(())
@@ -103,15 +95,14 @@ impl Wal {
             return Ok(Vec::new());
         }
 
-        let file = std::fs::File::open(&self.path)
-            .map_err(|e| KvStoreError::IoError(format!("Failed to open WAL file: {}", e)))?;
+        let file = std::fs::File::open(&self.path).map_err(KvStoreError::IoError)?;
 
         let reader = BufReader::new(file);
         let mut entries = Vec::new();
 
         for (line_no, line) in reader.lines().enumerate() {
             let line = line.map_err(|e| {
-                KvStoreError::IoError(format!("Failed to read WAL line {}: {}", line_no, e))
+                KvStoreError::OperationFailed(format!("Failed to read WAL line {}: {}", line_no, e))
             })?;
 
             if line.trim().is_empty() {
@@ -133,9 +124,8 @@ impl Wal {
 
     /// Clear the WAL (called after taking a snapshot)
     pub fn clear(&self) -> Result<()> {
-        std::fs::File::create(&self.path).map_err(|e| {
-            KvStoreError::IoError(format!("Failed to clear WAL: {}", e))
-        })?;
+        std::fs::File::create(&self.path)
+            .map_err(|e| KvStoreError::OperationFailed(format!("Failed to clear WAL: {}", e)))?;
         info!("WAL cleared");
         Ok(())
     }
@@ -144,7 +134,7 @@ impl Wal {
     pub fn size(&self) -> Result<u64> {
         std::fs::metadata(&self.path)
             .map(|m| m.len())
-            .map_err(|e| KvStoreError::IoError(format!("Failed to get WAL size: {}", e)))
+            .map_err(|e| KvStoreError::OperationFailed(format!("Failed to get WAL size: {}", e)))
     }
 
     /// Get the path
@@ -156,7 +146,6 @@ impl Wal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
 
     #[test]

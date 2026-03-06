@@ -94,7 +94,7 @@ pub async fn set_value(
 
 // DELETE /api/keys/{key}
 pub async fn delete_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
-    let entry = WalEntry::new(WalOperation::Delete {
+    let _entry = WalEntry::new(WalOperation::Delete {
         key: key.to_string(),
     });
     // Note: WAL not available in this signature; parameter will be added

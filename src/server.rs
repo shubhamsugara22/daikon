@@ -1,12 +1,12 @@
 use actix_web::{web, App, HttpServer};
 use parking_lot::RwLock;
+use rust_kv_store::wal::{Wal, WalOperation};
 use rust_kv_store::{api, kv_store::KvStore};
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
-use rust_kv_store::wal::{Wal, WalOperation};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -25,21 +25,12 @@ async fn main() -> std::io::Result<()> {
     let wal_path = PathBuf::from(env::var("KV_WAL_PATH").unwrap_or_else(|_| "server.wal".into()));
 
     // Initialize WAL
-    let wal = Arc::new(
-    let wal = match Wal::new(&wal_path) {
-        Ok(w) => {
-            info!("WAL initialized at: {}", wal_path.display());
-            w
-        }
-        Err(e) => {
-            error!("Failed to initialize WAL: {}", e);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("WAL initialization failed: {}", e),
-            ));
-        }
-    }
-    );
+    let wal = Wal::new(&wal_path).unwrap_or_else(|e| {
+        error!("Failed to initialize WAL: {}", e);
+        panic!("WAL initialization failed: {}", e);
+    });
+    info!("WAL initialized at: {}", wal_path.display());
+    let wal = Arc::new(wal);
 
     // Load existing store if file exists
     let kv_store = if store_path.exists() {
@@ -59,7 +50,7 @@ async fn main() -> std::io::Result<()> {
     };
 
     // Replay WAL entries to ensure durability
-    let mut kv_store = match replay_wal(&wal, kv_store) {
+    let kv_store = match replay_wal(&wal, kv_store) {
         Ok(store) => store,
         Err(e) => {
             error!("Failed to replay WAL: {}", e);
@@ -136,9 +127,9 @@ async fn main() -> std::io::Result<()> {
 
 /// Replay WAL entries to restore durability
 /// This ensures that any operations logged before shutdown are re-applied
-fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, Box<dyn std::error::Error>> {
-    let entries = wal.read_all()?;
-    
+fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
+    let entries = wal.read_all().map_err(|e| e.to_string())?;
+
     if entries.is_empty() {
         info!("No WAL entries to replay");
         return Ok(store);
@@ -153,35 +144,41 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, Box<dyn std::err
                 value,
                 ttl_secs,
             } => {
-                if let Ok(parsed_value) = serde_json::from_str::<rust_kv_store::kv_store::Value>(value) {
-                    let expires_at = ttl_secs.map(|secs| {
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs()
-                            + secs
-                    });
-                    store.set_with_options(key, parsed_value, expires_at)?;
+                if let Ok(parsed_value) =
+                    serde_json::from_str::<rust_kv_store::kv_store::Value>(value)
+                {
+                    let ttl_duration = ttl_secs.map(|secs| std::time::Duration::from_secs(secs));
+                    if let Some(ttl) = ttl_duration {
+                        store
+                            .set_with_ttl(key.clone(), parsed_value, ttl)
+                            .map_err(|e| e.to_string())?;
+                    } else {
+                        store
+                            .set(key.clone(), parsed_value)
+                            .map_err(|e| e.to_string())?;
+                    }
                 }
             }
             WalOperation::Delete { key } => {
-                let _ = store.delete(key);
+                let _ = store.delete(key); // Ignore if key doesn't exist
             }
             WalOperation::Incr { key } => {
-                let _ = store.incr(key);
+                let _ = store.incr(key); // Ignore errors during replay
             }
             WalOperation::Decr { key } => {
-                let _ = store.decr(key);
+                let _ = store.decr(key); // Ignore errors during replay
             }
             WalOperation::IncrBy { key, amount } => {
-                let _ = store.incrby(key, *amount);
+                let _ = store.incrby(key, *amount); // Ignore errors during replay
             }
             WalOperation::Append { key, value } => {
-                let _ = store.append(key, value);
+                let _ = store.append(key, value); // Ignore errors during replay
             }
             WalOperation::GetSet { key, value } => {
-                if let Ok(parsed_value) = serde_json::from_str::<rust_kv_store::kv_store::Value>(value) {
-                    let _ = store.getset(key, parsed_value);
+                if let Ok(parsed_value) =
+                    serde_json::from_str::<rust_kv_store::kv_store::Value>(value)
+                {
+                    let _ = store.getset(key.clone(), parsed_value); // Ignore errors during replay
                 }
             }
             WalOperation::Mset { pairs } => {
@@ -191,9 +188,13 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, Box<dyn std::err
                         serde_json::from_str::<rust_kv_store::kv_store::Value>(v)
                             .map(|parsed| (k.clone(), parsed))
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>();
                 if let Ok(parsed_pairs) = map {
-                    let _ = store.mset(&parsed_pairs);
+                    let pair_strings: Vec<(String, String)> = parsed_pairs
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect();
+                    let _ = store.mset(pair_strings); // Ignore errors during replay
                 }
             }
         }
