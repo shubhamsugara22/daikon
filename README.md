@@ -40,7 +40,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **28 Total Tests**: 23 integration tests + 5 API endpoint tests
+- **31 Total Tests**: 23 integration tests + 5 API endpoint tests + 3 WAL tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -191,7 +191,8 @@ rust-kv-store/
 - [x] **Comprehensive Testing**: 5 new API integration tests for transaction endpoints
 
 ### Phase 3: Persistence & Durability (Planned)
-- [ ] **Write-Ahead Logging**: Transaction log for crash recovery
+### Phase 3: Persistence & Durability (In Progress)
+- [x] **Write-Ahead Logging**: Transaction log for crash recovery
 - [ ] **Point-in-Time Recovery**: Restore to specific timestamps
 - [ ] **Replication**: Master-replica data synchronization
 - [ ] **Snapshot Management**: Configurable snapshot intervals
@@ -216,6 +217,13 @@ rust-kv-store/
 - Atomic writes (temp file + rename)
 - Versioned backups with automatic pruning
 - Configurable backup retention
+
+#### Write-Ahead Logging (WAL)
+- **Durability**: Every write operation is logged to disk before being applied to memory
+- **Crash Recovery**: On startup, the WAL is replayed to restore all committed operations
+- **Format**: JSON-encoded entries for easy inspection and recovery
+- **Operations Logged**: SET, DELETE, INCR, DECR, INCRBY, APPEND, GETSET, MSET
+- **Environment Configuration**: `KV_WAL_PATH` (default: `server.wal`)
 
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
