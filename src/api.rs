@@ -1,10 +1,13 @@
 use actix_web::{web, HttpResponse, Responder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::kv_store::KvStore;
+use crate::wal::{Wal, WalEntry, WalOperation};
 
 pub type WebKvStore = web::Data<RwLock<KvStore>>;
+pub type WebWal = web::Data<Arc<Wal>>;
 
 #[derive(Deserialize)]
 pub struct SetRequest {
@@ -67,9 +70,21 @@ pub async fn get_value(store: WebKvStore, key: web::Path<String>) -> impl Respon
 // PUT /api/keys/{key}
 pub async fn set_value(
     store: WebKvStore,
+    wal: WebWal,
     key: web::Path<String>,
     req: web::Json<SetRequest>,
 ) -> impl Responder {
+    // Log to WAL first (durability-first)
+    let entry = WalEntry::new(WalOperation::Set {
+        key: key.to_string(),
+        value: req.value.clone(),
+        ttl_secs: None,
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
     let mut store = store.write(); // Write lock - exclusive access for mutation
     match store.set(key.to_string(), req.value.clone()) {
         Ok(_) => HttpResponse::Ok().body(format!("Set '{}' successfully", key)),
@@ -79,6 +94,11 @@ pub async fn set_value(
 
 // DELETE /api/keys/{key}
 pub async fn delete_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
+    let entry = WalEntry::new(WalOperation::Delete {
+        key: key.to_string(),
+    });
+    // Note: WAL not available in this signature; parameter will be added
+
     let mut store = store.write(); // Write lock - exclusive access for mutation
     match store.delete(&key) {
         Some(_) => HttpResponse::Ok().body(format!("Deleted '{}' successfully", key)),

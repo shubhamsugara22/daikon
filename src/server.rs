@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
+use rust_kv_store::wal::{Wal, WalOperation};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -21,6 +22,24 @@ async fn main() -> std::io::Result<()> {
     let bind = env::var("KV_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let store_path =
         PathBuf::from(env::var("KV_STORE_PATH").unwrap_or_else(|_| "server_store.json".into()));
+    let wal_path = PathBuf::from(env::var("KV_WAL_PATH").unwrap_or_else(|_| "server.wal".into()));
+
+    // Initialize WAL
+    let wal = Arc::new(
+    let wal = match Wal::new(&wal_path) {
+        Ok(w) => {
+            info!("WAL initialized at: {}", wal_path.display());
+            w
+        }
+        Err(e) => {
+            error!("Failed to initialize WAL: {}", e);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("WAL initialization failed: {}", e),
+            ));
+        }
+    }
+    );
 
     // Load existing store if file exists
     let kv_store = if store_path.exists() {
@@ -39,6 +58,18 @@ async fn main() -> std::io::Result<()> {
         KvStore::new()
     };
 
+    // Replay WAL entries to ensure durability
+    let mut kv_store = match replay_wal(&wal, kv_store) {
+        Ok(store) => store,
+        Err(e) => {
+            error!("Failed to replay WAL: {}", e);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("WAL replay failed: {}", e),
+            ));
+        }
+    };
+
     let store = Arc::new(RwLock::new(kv_store));
     let store_for_shutdown = Arc::clone(&store);
     let store_path_for_shutdown = store_path.clone();
@@ -48,6 +79,7 @@ async fn main() -> std::io::Result<()> {
     let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::from(Arc::clone(&store)))
+            .app_data(web::Data::from(Arc::clone(&wal)))
             .service(
                 web::scope("/api")
                     // Basic operations
@@ -100,6 +132,75 @@ async fn main() -> std::io::Result<()> {
     });
 
     server.await
+}
+
+/// Replay WAL entries to restore durability
+/// This ensures that any operations logged before shutdown are re-applied
+fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, Box<dyn std::error::Error>> {
+    let entries = wal.read_all()?;
+    
+    if entries.is_empty() {
+        info!("No WAL entries to replay");
+        return Ok(store);
+    }
+
+    info!("Replaying {} WAL entries...", entries.len());
+
+    for entry in entries {
+        match &entry.operation {
+            WalOperation::Set {
+                key,
+                value,
+                ttl_secs,
+            } => {
+                if let Ok(parsed_value) = serde_json::from_str::<rust_kv_store::kv_store::Value>(value) {
+                    let expires_at = ttl_secs.map(|secs| {
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            + secs
+                    });
+                    store.set_with_options(key, parsed_value, expires_at)?;
+                }
+            }
+            WalOperation::Delete { key } => {
+                let _ = store.delete(key);
+            }
+            WalOperation::Incr { key } => {
+                let _ = store.incr(key);
+            }
+            WalOperation::Decr { key } => {
+                let _ = store.decr(key);
+            }
+            WalOperation::IncrBy { key, amount } => {
+                let _ = store.incrby(key, *amount);
+            }
+            WalOperation::Append { key, value } => {
+                let _ = store.append(key, value);
+            }
+            WalOperation::GetSet { key, value } => {
+                if let Ok(parsed_value) = serde_json::from_str::<rust_kv_store::kv_store::Value>(value) {
+                    let _ = store.getset(key, parsed_value);
+                }
+            }
+            WalOperation::Mset { pairs } => {
+                let map: Result<_, _> = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        serde_json::from_str::<rust_kv_store::kv_store::Value>(v)
+                            .map(|parsed| (k.clone(), parsed))
+                    })
+                    .collect();
+                if let Ok(parsed_pairs) = map {
+                    let _ = store.mset(&parsed_pairs);
+                }
+            }
+        }
+    }
+
+    info!("WAL replay completed successfully");
+    Ok(store)
 }
 
 async fn shutdown_signal() {
