@@ -40,7 +40,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **31 Total Tests**: 23 integration tests + 5 API endpoint tests + 3 WAL tests
+- **35 Total Tests**: 7 library tests (incl. 3 WAL tests) + 5 API endpoint tests + 23 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -190,9 +190,8 @@ rust-kv-store/
 - [x] **Benchmarking CLI**: `benchmark` command to run performance suite
 - [x] **Comprehensive Testing**: 5 new API integration tests for transaction endpoints
 
-### Phase 3: Persistence & Durability (Planned)
 ### Phase 3: Persistence & Durability (In Progress)
-- [x] **Write-Ahead Logging**: Transaction log for crash recovery
+- [x] **Write-Ahead Logging**: Transaction log for crash recovery - **FULLY INTEGRATED**
 - [ ] **Point-in-Time Recovery**: Restore to specific timestamps
 - [ ] **Replication**: Master-replica data synchronization
 - [ ] **Snapshot Management**: Configurable snapshot intervals
@@ -219,11 +218,13 @@ rust-kv-store/
 - Configurable backup retention
 
 #### Write-Ahead Logging (WAL)
+- **Production Ready**: ✅ Fully integrated across all API write endpoints
 - **Durability**: Every write operation is logged to disk before being applied to memory
 - **Crash Recovery**: On startup, the WAL is replayed to restore all committed operations
 - **Format**: JSON-encoded entries for easy inspection and recovery
 - **Operations Logged**: SET, DELETE, INCR, DECR, INCRBY, APPEND, GETSET, MSET
 - **Environment Configuration**: `KV_WAL_PATH` (default: `server.wal`)
+- **API Coverage**: All 8 write endpoints log operations before execution
 
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
@@ -296,7 +297,7 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
-- **28 Total Tests**: 23 integration tests + 5 API endpoint tests, all passing with 100% success rate
+- **35 Total Tests**: 7 library tests + 5 API endpoint tests + 23 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
