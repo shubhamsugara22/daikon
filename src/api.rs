@@ -93,11 +93,19 @@ pub async fn set_value(
 }
 
 // DELETE /api/keys/{key}
-pub async fn delete_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
-    let _entry = WalEntry::new(WalOperation::Delete {
+pub async fn delete_value(
+    store: WebKvStore,
+    wal: WebWal,
+    key: web::Path<String>,
+) -> impl Responder {
+    // Log to WAL first
+    let entry = WalEntry::new(WalOperation::Delete {
         key: key.to_string(),
     });
-    // Note: WAL not available in this signature; parameter will be added
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
 
     let mut store = store.write(); // Write lock - exclusive access for mutation
     match store.delete(&key) {
@@ -121,7 +129,16 @@ pub async fn list_keys(store: WebKvStore) -> impl Responder {
 }
 
 // POST /api/incr/{key}
-pub async fn incr_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
+pub async fn incr_value(store: WebKvStore, wal: WebWal, key: web::Path<String>) -> impl Responder {
+    // Log to WAL first
+    let entry = WalEntry::new(WalOperation::Incr {
+        key: key.to_string(),
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
     let mut store = store.write(); // Write lock
     match store.incr(&key) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
@@ -130,7 +147,16 @@ pub async fn incr_value(store: WebKvStore, key: web::Path<String>) -> impl Respo
 }
 
 // POST /api/decr/{key}
-pub async fn decr_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
+pub async fn decr_value(store: WebKvStore, wal: WebWal, key: web::Path<String>) -> impl Responder {
+    // Log to WAL first
+    let entry = WalEntry::new(WalOperation::Decr {
+        key: key.to_string(),
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
     let mut store = store.write(); // Write lock
     match store.decr(&key) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
@@ -141,9 +167,20 @@ pub async fn decr_value(store: WebKvStore, key: web::Path<String>) -> impl Respo
 // POST /api/incrby/{key}
 pub async fn incrby_value(
     store: WebKvStore,
+    wal: WebWal,
     key: web::Path<String>,
     req: web::Json<IncrByRequest>,
 ) -> impl Responder {
+    // Log to WAL first
+    let entry = WalEntry::new(WalOperation::IncrBy {
+        key: key.to_string(),
+        amount: req.amount,
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
     let mut store = store.write(); // Write lock
     match store.incrby(&key, req.amount) {
         Ok(new_val) => HttpResponse::Ok().json(new_val),
@@ -154,9 +191,20 @@ pub async fn incrby_value(
 // POST /api/append/{key}
 pub async fn append_value(
     store: WebKvStore,
+    wal: WebWal,
     key: web::Path<String>,
     req: web::Json<AppendRequest>,
 ) -> impl Responder {
+    // Log to WAL first
+    let entry = WalEntry::new(WalOperation::Append {
+        key: key.to_string(),
+        value: req.value.clone(),
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
     let mut store = store.write(); // Write lock
     match store.append(&key, &req.value) {
         Ok(len) => HttpResponse::Ok().json(len),
@@ -167,9 +215,20 @@ pub async fn append_value(
 // POST /api/getset/{key}
 pub async fn getset_value(
     store: WebKvStore,
+    wal: WebWal,
     key: web::Path<String>,
     req: web::Json<SetRequest>,
 ) -> impl Responder {
+    // Log to WAL first
+    let entry = WalEntry::new(WalOperation::GetSet {
+        key: key.to_string(),
+        value: req.value.clone(),
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
     let mut store = store.write(); // Write lock
     match store.getset(key.to_string(), req.value.clone()) {
         Ok(Some(old_val)) => HttpResponse::Ok().json(old_val.to_string()),
@@ -190,14 +249,27 @@ pub async fn mget_values(store: WebKvStore, req: web::Json<MGetRequest>) -> impl
 }
 
 // POST /api/mset
-pub async fn mset_values(store: WebKvStore, req: web::Json<MSetRequest>) -> impl Responder {
-    let mut store = store.write(); // Write lock
-    let pairs: Vec<(String, String)> = req
+pub async fn mset_values(
+    store: WebKvStore,
+    wal: WebWal,
+    req: web::Json<MSetRequest>,
+) -> impl Responder {
+    // Log to WAL first
+    let pairs_vec: Vec<(String, String)> = req
         .pairs
         .iter()
         .map(|kv| (kv.key.clone(), kv.value.clone()))
         .collect();
-    match store.mset(pairs) {
+    let entry = WalEntry::new(WalOperation::Mset {
+        pairs: pairs_vec.clone(),
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
+    let mut store = store.write(); // Write lock
+    match store.mset(pairs_vec) {
         Ok(_) => HttpResponse::Ok().body("OK"),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
