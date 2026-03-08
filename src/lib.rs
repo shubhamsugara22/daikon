@@ -3,5 +3,6 @@ pub mod cli;
 pub mod config;
 pub mod error;
 pub mod kv_store;
+pub mod pitr;
 pub mod stats;
 pub mod wal;

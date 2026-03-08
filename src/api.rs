@@ -1,13 +1,14 @@
 use actix_web::{web, HttpResponse, Responder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::kv_store::KvStore;
+use crate::pitr::Pitr;
 use crate::wal::{Wal, WalEntry, WalOperation};
 
 pub type WebKvStore = web::Data<RwLock<KvStore>>;
-pub type WebWal = web::Data<Arc<Wal>>;
+pub type WebWal = web::Data<Wal>;
+pub type WebPitr = web::Data<Pitr>;
 
 #[derive(Deserialize)]
 pub struct SetRequest {
@@ -38,6 +39,11 @@ pub struct MSetRequest {
 pub struct KeyValuePair {
     key: String,
     value: String,
+}
+
+#[derive(Deserialize)]
+pub struct CleanupSnapshotsRequest {
+    max_age_secs: u64,
 }
 
 #[derive(Serialize)]
@@ -351,4 +357,84 @@ pub async fn get_memory_profile(store: WebKvStore) -> impl Responder {
     let store = store.read(); // Read lock
     let profile = store.memory_profile();
     HttpResponse::Ok().json(profile)
+}
+
+// POST /api/pitr/snapshot
+pub async fn pitr_create_snapshot(store: WebKvStore, pitr: WebPitr) -> impl Responder {
+    let store = store.read();
+    match pitr.create_snapshot(&store) {
+        Ok(metadata) => HttpResponse::Ok().json(metadata),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+// GET /api/pitr/snapshots
+pub async fn pitr_list_snapshots(pitr: WebPitr) -> impl Responder {
+    match pitr.list_snapshots() {
+        Ok(snapshots) => HttpResponse::Ok().json(snapshots),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+// POST /api/pitr/recover/{timestamp}
+pub async fn pitr_recover_to_timestamp(
+    store: WebKvStore,
+    pitr: WebPitr,
+    timestamp: web::Path<u64>,
+) -> impl Responder {
+    let target = timestamp.into_inner();
+    match pitr.recover_to_timestamp(target) {
+        Ok(recovered_store) => {
+            let mut store_guard = store.write();
+            *store_guard = recovered_store;
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "OK",
+                "recovered_to": target
+            }))
+        }
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "ERROR",
+            "error": e.to_string()
+        })),
+    }
+}
+
+// POST /api/pitr/recover/latest
+pub async fn pitr_recover_latest_snapshot(store: WebKvStore, pitr: WebPitr) -> impl Responder {
+    match pitr.recover_to_latest_snapshot() {
+        Ok(recovered_store) => {
+            let mut store_guard = store.write();
+            *store_guard = recovered_store;
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "OK",
+                "message": "Recovered to latest snapshot"
+            }))
+        }
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "ERROR",
+            "error": e.to_string()
+        })),
+    }
+}
+
+// GET /api/pitr/stats
+pub async fn pitr_stats(pitr: WebPitr) -> impl Responder {
+    match pitr.get_recovery_stats() {
+        Ok(stats) => HttpResponse::Ok().json(stats),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+// POST /api/pitr/cleanup
+pub async fn pitr_cleanup_old_snapshots(
+    pitr: WebPitr,
+    req: web::Json<CleanupSnapshotsRequest>,
+) -> impl Responder {
+    match pitr.cleanup_old_snapshots(req.max_age_secs) {
+        Ok(deleted) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "OK",
+            "deleted_snapshots": deleted
+        })),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
 }

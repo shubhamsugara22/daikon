@@ -1,7 +1,8 @@
 use actix_web::{test, web, App};
 use parking_lot::RwLock;
-use rust_kv_store::{api, kv_store::KvStore};
+use rust_kv_store::{api, kv_store::KvStore, pitr::Pitr, wal::Wal};
 use std::sync::Arc;
+use tempfile::TempDir;
 
 #[actix_web::test]
 async fn test_api_multi_starts_transaction() {
@@ -82,6 +83,56 @@ async fn test_api_memory_profile_endpoint() {
     .await;
 
     let req = test::TestRequest::get().uri("/api/memory").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_api_pitr_snapshot_and_list() {
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("test.wal")).unwrap());
+    let pitr = Arc::new(Pitr::new(temp_dir.path().join("snapshots"), wal).unwrap());
+    let store = Arc::new(RwLock::new(KvStore::new()));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(Arc::clone(&pitr)))
+            .service(
+                web::scope("/api")
+                    .route("/pitr/snapshot", web::post().to(api::pitr_create_snapshot))
+                    .route("/pitr/snapshots", web::get().to(api::pitr_list_snapshots)),
+            ),
+    )
+    .await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/pitr/snapshot")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let req = test::TestRequest::get()
+        .uri("/api/pitr/snapshots")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_api_pitr_stats_endpoint() {
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("test.wal")).unwrap());
+    let pitr = Arc::new(Pitr::new(temp_dir.path().join("snapshots"), wal).unwrap());
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::from(pitr))
+            .service(web::scope("/api").route("/pitr/stats", web::get().to(api::pitr_stats))),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/api/pitr/stats").to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
 }

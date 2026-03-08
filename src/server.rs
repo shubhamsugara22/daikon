@@ -1,5 +1,6 @@
 use actix_web::{web, App, HttpServer};
 use parking_lot::RwLock;
+use rust_kv_store::pitr::Pitr;
 use rust_kv_store::wal::{Wal, WalOperation};
 use rust_kv_store::{api, kv_store::KvStore};
 use std::env;
@@ -23,6 +24,8 @@ async fn main() -> std::io::Result<()> {
     let store_path =
         PathBuf::from(env::var("KV_STORE_PATH").unwrap_or_else(|_| "server_store.json".into()));
     let wal_path = PathBuf::from(env::var("KV_WAL_PATH").unwrap_or_else(|_| "server.wal".into()));
+    let snapshots_dir =
+        PathBuf::from(env::var("KV_SNAPSHOTS_DIR").unwrap_or_else(|_| "snapshots".into()));
 
     // Initialize WAL
     let wal = Wal::new(&wal_path).unwrap_or_else(|e| {
@@ -31,6 +34,13 @@ async fn main() -> std::io::Result<()> {
     });
     info!("WAL initialized at: {}", wal_path.display());
     let wal = Arc::new(wal);
+
+    let pitr = Pitr::new(&snapshots_dir, Arc::clone(&wal)).unwrap_or_else(|e| {
+        error!("Failed to initialize PITR: {}", e);
+        panic!("PITR initialization failed: {}", e);
+    });
+    info!("PITR snapshots directory: {}", snapshots_dir.display());
+    let pitr = Arc::new(pitr);
 
     // Load existing store if file exists
     let kv_store = if store_path.exists() {
@@ -71,6 +81,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::Data::from(Arc::clone(&store)))
             .app_data(web::Data::from(Arc::clone(&wal)))
+            .app_data(web::Data::from(Arc::clone(&pitr)))
             .service(
                 web::scope("/api")
                     // Basic operations
@@ -96,7 +107,23 @@ async fn main() -> std::io::Result<()> {
                     // Transactions
                     .route("/multi", web::post().to(api::multi))
                     .route("/exec", web::post().to(api::exec))
-                    .route("/discard", web::post().to(api::discard)),
+                    .route("/discard", web::post().to(api::discard))
+                    // PITR operations
+                    .route("/pitr/snapshot", web::post().to(api::pitr_create_snapshot))
+                    .route("/pitr/snapshots", web::get().to(api::pitr_list_snapshots))
+                    .route(
+                        "/pitr/recover/{timestamp}",
+                        web::post().to(api::pitr_recover_to_timestamp),
+                    )
+                    .route(
+                        "/pitr/recover/latest",
+                        web::post().to(api::pitr_recover_latest_snapshot),
+                    )
+                    .route("/pitr/stats", web::get().to(api::pitr_stats))
+                    .route(
+                        "/pitr/cleanup",
+                        web::post().to(api::pitr_cleanup_old_snapshots),
+                    ),
             )
     })
     .bind(&bind)?

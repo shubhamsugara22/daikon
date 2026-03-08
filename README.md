@@ -40,7 +40,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **35 Total Tests**: 7 library tests (incl. 3 WAL tests) + 5 API endpoint tests + 23 integration tests
+- **40 Total Tests**: 10 library tests (incl. WAL + PITR tests) + 7 API endpoint tests + 23 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -192,7 +192,7 @@ rust-kv-store/
 
 ### Phase 3: Persistence & Durability (In Progress)
 - [x] **Write-Ahead Logging**: Transaction log for crash recovery - **FULLY INTEGRATED**
-- [ ] **Point-in-Time Recovery**: Restore to specific timestamps
+- [x] **Point-in-Time Recovery**: Restore to specific timestamps - **IMPLEMENTED**
 - [ ] **Replication**: Master-replica data synchronization
 - [ ] **Snapshot Management**: Configurable snapshot intervals
 - [ ] **Compression**: Gzip/zstd compression for storage
@@ -225,6 +225,14 @@ rust-kv-store/
 - **Operations Logged**: SET, DELETE, INCR, DECR, INCRBY, APPEND, GETSET, MSET
 - **Environment Configuration**: `KV_WAL_PATH` (default: `server.wal`)
 - **API Coverage**: All 8 write endpoints log operations before execution
+
+#### Point-in-Time Recovery (PITR)
+- **Snapshots**: Create on-demand snapshots via `POST /api/pitr/snapshot`
+- **Recovery Targets**: Recover to a Unix timestamp via `POST /api/pitr/recover/{timestamp}`
+- **Latest Recovery**: Restore latest snapshot via `POST /api/pitr/recover/latest`
+- **Observability**: Recovery stats via `GET /api/pitr/stats`
+- **Retention**: Snapshot cleanup via `POST /api/pitr/cleanup`
+- **Environment Configuration**: `KV_SNAPSHOTS_DIR` (default: `snapshots`)
 
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
@@ -297,7 +305,7 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
-- **35 Total Tests**: 7 library tests + 5 API endpoint tests + 23 integration tests, all passing with 100% success rate
+- **40 Total Tests**: 10 library tests + 7 API endpoint tests + 23 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
