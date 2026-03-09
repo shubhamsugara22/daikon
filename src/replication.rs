@@ -285,7 +285,7 @@ impl ReplicationReplica {
                 }
             }
             WalOperation::Delete { key } => {
-                store.delete(key)?;
+                let _ = store.delete(key); // Returns Option<Value>
             }
             WalOperation::Incr { key } => {
                 store.incr(key)?;
@@ -300,7 +300,7 @@ impl ReplicationReplica {
                 store.append(key, value)?;
             }
             WalOperation::GetSet { key, value } => {
-                store.getset(key, value.clone())?;
+                let _ = store.getset(key.clone(), value.clone())?;
             }
             WalOperation::Mset { pairs } => {
                 store.mset(pairs.clone())?;
