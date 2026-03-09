@@ -335,7 +335,6 @@ pub struct ReplicationStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StoreConfig;
     use tempfile::tempdir;
 
     #[test]
@@ -390,11 +389,9 @@ mod tests {
     #[test]
     fn test_replication_replica_status() {
         let temp_dir = tempdir().unwrap();
-        let store_path = temp_dir.path().join("store.json");
         let wal_path = temp_dir.path().join("wal.log");
 
-        let config = StoreConfig::default();
-        let store = Arc::new(RwLock::new(KvStore::new(config)));
+        let store = Arc::new(RwLock::new(KvStore::new()));
         let wal = Arc::new(Wal::new(&wal_path).unwrap());
 
         let replica = ReplicationReplica::new(

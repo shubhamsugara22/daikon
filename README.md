@@ -40,7 +40,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **40 Total Tests**: 10 library tests (incl. WAL + PITR tests) + 7 API endpoint tests + 23 integration tests
+- **43 Total Tests**: 13 library tests (incl. WAL + PITR + replication tests) + 7 API endpoint tests + 23 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -193,7 +193,7 @@ rust-kv-store/
 ### Phase 3: Persistence & Durability (In Progress)
 - [x] **Write-Ahead Logging**: Transaction log for crash recovery - **FULLY INTEGRATED**
 - [x] **Point-in-Time Recovery**: Restore to specific timestamps - **IMPLEMENTED**
-- [ ] **Replication**: Master-replica data synchronization
+- [x] **Replication**: Master-replica data synchronization - **BASELINE IMPLEMENTED**
 - [ ] **Snapshot Management**: Configurable snapshot intervals
 - [ ] **Compression**: Gzip/zstd compression for storage
 
@@ -233,6 +233,14 @@ rust-kv-store/
 - **Observability**: Recovery stats via `GET /api/pitr/stats`
 - **Retention**: Snapshot cleanup via `POST /api/pitr/cleanup`
 - **Environment Configuration**: `KV_SNAPSHOTS_DIR` (default: `snapshots`)
+
+#### Replication
+- **Roles**: Master or replica via `KV_NODE_ROLE` (`master` default)
+- **Master Feed**: Replicas pull WAL entries from `GET /api/replication/wal`
+- **Heartbeat Tracking**: Replica heartbeat at `POST /api/replication/heartbeat`
+- **Replica Sync API**: Manual sync `POST /api/replication/sync`, status `GET /api/replication/status`
+- **Replica Health View**: Master lists replicas at `GET /api/replication/replicas`
+- **Environment Configuration**: `KV_MASTER_URL`, `KV_REPLICA_ID`, `KV_REPLICATION_POLL_INTERVAL`
 
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
@@ -305,7 +313,7 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
-- **40 Total Tests**: 10 library tests + 7 API endpoint tests + 23 integration tests, all passing with 100% success rate
+- **43 Total Tests**: 13 library tests + 7 API endpoint tests + 23 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
