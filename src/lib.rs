@@ -4,5 +4,6 @@ pub mod config;
 pub mod error;
 pub mod kv_store;
 pub mod pitr;
+pub mod replication;
 pub mod stats;
 pub mod wal;

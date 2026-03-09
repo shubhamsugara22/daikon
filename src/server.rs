@@ -1,11 +1,13 @@
 use actix_web::{web, App, HttpServer};
 use parking_lot::RwLock;
 use rust_kv_store::pitr::Pitr;
+use rust_kv_store::replication::{ReplicationMaster, ReplicationReplica, ReplicationRole};
 use rust_kv_store::wal::{Wal, WalOperation};
 use rust_kv_store::{api, kv_store::KvStore};
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -27,6 +29,32 @@ async fn main() -> std::io::Result<()> {
     let snapshots_dir =
         PathBuf::from(env::var("KV_SNAPSHOTS_DIR").unwrap_or_else(|_| "snapshots".into()));
 
+    // Replication configuration
+    let node_role = env::var("KV_NODE_ROLE")
+        .unwrap_or_else(|_| "master".into())
+        .to_lowercase();
+    let replication_role = match node_role.as_str() {
+        "replica" => ReplicationRole::Replica,
+        _ => ReplicationRole::Master,
+    };
+    let master_url = env::var("KV_MASTER_URL").ok();
+    let replica_id = env::var("KV_REPLICA_ID")
+        .unwrap_or_else(|_| format!("replica-{}", bind.replace(":", "-")));
+    let replication_poll_interval_secs: u64 = env::var("KV_REPLICATION_POLL_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
+
+    info!("Node role: {:?}", replication_role);
+    if replication_role == ReplicationRole::Replica {
+        if let Some(ref url) = master_url {
+            info!("Replica ID: {}, Master URL: {}", replica_id, url);
+        } else {
+            error!("KV_MASTER_URL must be set for replica mode");
+            panic!("Missing KV_MASTER_URL for replica");
+        }
+    }
+
     // Initialize WAL
     let wal = Wal::new(&wal_path).unwrap_or_else(|e| {
         error!("Failed to initialize WAL: {}", e);
@@ -41,6 +69,21 @@ async fn main() -> std::io::Result<()> {
     });
     info!("PITR snapshots directory: {}", snapshots_dir.display());
     let pitr = Arc::new(pitr);
+
+    // Initialize replication based on role
+    let replication_master = if replication_role == ReplicationRole::Master {
+        Some(Arc::new(ReplicationMaster::new(Arc::clone(&wal), 30)))
+    } else {
+        None
+    };
+
+    let replication_replica = if replication_role == ReplicationRole::Replica {
+        let master_url_str = master_url.as_ref().unwrap().clone();
+        // We'll initialize this after loading the store
+        Some((replica_id.clone(), master_url_str))
+    } else {
+        None
+    };
 
     // Load existing store if file exists
     let kv_store = if store_path.exists() {
@@ -75,56 +118,119 @@ async fn main() -> std::io::Result<()> {
     let store_for_shutdown = Arc::clone(&store);
     let store_path_for_shutdown = store_path.clone();
 
+    // Initialize replica if in replica mode
+    let replication_replica_instance = if let Some((replica_id, master_url)) = replication_replica {
+        match ReplicationReplica::new(
+            replica_id.clone(),
+            master_url.clone(),
+            Arc::clone(&store),
+            Arc::clone(&wal),
+        ) {
+            Ok(replica) => {
+                info!("Initialized replication replica");
+                let replica = Arc::new(replica);
+                
+                // Spawn background sync task
+                let replica_for_sync = Arc::clone(&replica);
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(Duration::from_secs(replication_poll_interval_secs));
+                    loop {
+                        interval.tick().await;
+                        match replica_for_sync.sync() {
+                            Ok(applied) => {
+                                if applied > 0 {
+                                    info!("Replica sync: applied {} entries", applied);
+                                }
+                            }
+                            Err(e) => {
+                                error!("Replica sync failed: {}", e);
+                            }
+                        }
+                    }
+                });
+                
+                Some(replica)
+            }
+            Err(e) => {
+                error!("Failed to initialize replication replica: {}", e);
+                panic!("Replication replica initialization failed: {}", e);
+            }
+        }
+    } else {
+        None
+    };
+
     info!("Starting server at http://{}", bind);
 
+    let replication_master_for_server = replication_master.clone();
+    let replication_replica_for_server = replication_replica_instance.clone();
+
     let server = HttpServer::new(move || {
-        App::new()
+        let mut app = App::new()
             .app_data(web::Data::from(Arc::clone(&store)))
             .app_data(web::Data::from(Arc::clone(&wal)))
-            .app_data(web::Data::from(Arc::clone(&pitr)))
-            .service(
-                web::scope("/api")
-                    // Basic operations
-                    .route("/keys", web::get().to(api::list_keys))
-                    .route("/keys/{key}", web::get().to(api::get_value))
-                    .route("/keys/{key}", web::put().to(api::set_value))
-                    .route("/keys/{key}", web::delete().to(api::delete_value))
-                    // Atomic operations
-                    .route("/incr/{key}", web::post().to(api::incr_value))
-                    .route("/decr/{key}", web::post().to(api::decr_value))
-                    .route("/incrby/{key}", web::post().to(api::incrby_value))
-                    .route("/append/{key}", web::post().to(api::append_value))
-                    .route("/getset/{key}", web::post().to(api::getset_value))
-                    // Batch operations
-                    .route("/mget", web::post().to(api::mget_values))
-                    .route("/mset", web::post().to(api::mset_values))
-                    .route("/exists/{key}", web::get().to(api::exists_key))
-                    // Pattern matching & stats
-                    .route("/keys/pattern/{pattern}", web::get().to(api::keys_pattern))
-                    .route("/stats", web::get().to(api::get_stats))
-                    .route("/cleanup", web::post().to(api::cleanup_expired))
-                    .route("/memory", web::get().to(api::get_memory_profile))
-                    // Transactions
-                    .route("/multi", web::post().to(api::multi))
-                    .route("/exec", web::post().to(api::exec))
-                    .route("/discard", web::post().to(api::discard))
-                    // PITR operations
-                    .route("/pitr/snapshot", web::post().to(api::pitr_create_snapshot))
-                    .route("/pitr/snapshots", web::get().to(api::pitr_list_snapshots))
-                    .route(
-                        "/pitr/recover/{timestamp}",
-                        web::post().to(api::pitr_recover_to_timestamp),
-                    )
-                    .route(
-                        "/pitr/recover/latest",
-                        web::post().to(api::pitr_recover_latest_snapshot),
-                    )
-                    .route("/pitr/stats", web::get().to(api::pitr_stats))
-                    .route(
-                        "/pitr/cleanup",
-                        web::post().to(api::pitr_cleanup_old_snapshots),
-                    ),
-            )
+            .app_data(web::Data::from(Arc::clone(&pitr)));
+
+        // Add replication master data if in master mode
+        if let Some(ref master) = replication_master_for_server {
+            app = app.app_data(web::Data::from(Arc::clone(master)));
+        }
+
+        // Add replication replica data if in replica mode
+        if let Some(ref replica) = replication_replica_for_server {
+            app = app.app_data(web::Data::from(Arc::clone(replica)));
+        }
+
+        app.service(
+            web::scope("/api")
+                // Basic operations
+                .route("/keys", web::get().to(api::list_keys))
+                .route("/keys/{key}", web::get().to(api::get_value))
+                .route("/keys/{key}", web::put().to(api::set_value))
+                .route("/keys/{key}", web::delete().to(api::delete_value))
+                // Atomic operations
+                .route("/incr/{key}", web::post().to(api::incr_value))
+                .route("/decr/{key}", web::post().to(api::decr_value))
+                .route("/incrby/{key}", web::post().to(api::incrby_value))
+                .route("/append/{key}", web::post().to(api::append_value))
+                .route("/getset/{key}", web::post().to(api::getset_value))
+                // Batch operations
+                .route("/mget", web::post().to(api::mget_values))
+                .route("/mset", web::post().to(api::mset_values))
+                .route("/exists/{key}", web::get().to(api::exists_key))
+                // Pattern matching & stats
+                .route("/keys/pattern/{pattern}", web::get().to(api::keys_pattern))
+                .route("/stats", web::get().to(api::get_stats))
+                .route("/cleanup", web::post().to(api::cleanup_expired))
+                .route("/memory", web::get().to(api::get_memory_profile))
+                // Transactions
+                .route("/multi", web::post().to(api::multi))
+                .route("/exec", web::post().to(api::exec))
+                .route("/discard", web::post().to(api::discard))
+                // PITR operations
+                .route("/pitr/snapshot", web::post().to(api::pitr_create_snapshot))
+                .route("/pitr/snapshots", web::get().to(api::pitr_list_snapshots))
+                .route(
+                    "/pitr/recover/{timestamp}",
+                    web::post().to(api::pitr_recover_to_timestamp),
+                )
+                .route(
+                    "/pitr/recover/latest",
+                    web::post().to(api::pitr_recover_latest_snapshot),
+                )
+                .route("/pitr/stats", web::get().to(api::pitr_stats))
+                .route(
+                    "/pitr/cleanup",
+                    web::post().to(api::pitr_cleanup_old_snapshots),
+                )
+                // Master replication endpoints (only available in master mode)
+                .route("/replication/heartbeat", web::post().to(api::replication_heartbeat))
+                .route("/replication/wal", web::get().to(api::replication_get_wal))
+                .route("/replication/replicas", web::get().to(api::replication_list_replicas))
+                // Replica replication endpoints (only available in replica mode)
+                .route("/replication/sync", web::post().to(api::replication_sync))
+                .route("/replication/status", web::get().to(api::replication_status)),
+        )
     })
     .bind(&bind)?
     .run();

@@ -4,11 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::kv_store::KvStore;
 use crate::pitr::Pitr;
+use crate::replication::{ReplicationMaster, ReplicationReplica};
 use crate::wal::{Wal, WalEntry, WalOperation};
 
 pub type WebKvStore = web::Data<RwLock<KvStore>>;
 pub type WebWal = web::Data<Wal>;
 pub type WebPitr = web::Data<Pitr>;
+pub type WebReplicationMaster = web::Data<ReplicationMaster>;
+pub type WebReplicationReplica = web::Data<ReplicationReplica>;
 
 #[derive(Deserialize)]
 pub struct SetRequest {
@@ -437,4 +440,94 @@ pub async fn pitr_cleanup_old_snapshots(
         })),
         Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
     }
+}
+
+// ======================
+// Replication Endpoints
+// ======================
+
+#[derive(Deserialize)]
+pub struct HeartbeatRequest {
+    pub replica_id: String,
+    pub last_applied_index: u64,
+}
+
+#[derive(Deserialize)]
+pub struct WalQueryParams {
+    pub from_index: u64,
+    pub limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct WalEntriesResponse {
+    pub entries: Vec<WalEntry>,
+    pub total_entries: u64,
+}
+
+// POST /api/replication/heartbeat
+// Replica sends heartbeat to master and registers itself
+pub async fn replication_heartbeat(
+    master: WebReplicationMaster,
+    req: web::Json<HeartbeatRequest>,
+) -> impl Responder {
+    match master.register_replica(req.replica_id.clone(), req.last_applied_index) {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "OK",
+            "message": "Heartbeat received"
+        })),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+// GET /api/replication/wal?from_index=0&limit=100
+// Master serves WAL entries to replicas
+pub async fn replication_get_wal(
+    master: WebReplicationMaster,
+    query: web::Query<WalQueryParams>,
+) -> impl Responder {
+    let limit = query.limit.unwrap_or(100);
+
+    match master.get_wal_entries(query.from_index, limit) {
+        Ok(entries) => match master.get_total_entries() {
+            Ok(total) => HttpResponse::Ok().json(WalEntriesResponse {
+                entries,
+                total_entries: total,
+            }),
+            Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+        },
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+// GET /api/replication/replicas
+// Get list of all connected replicas (master only)
+pub async fn replication_list_replicas(master: WebReplicationMaster) -> impl Responder {
+    let replicas = master.get_replicas_info();
+    HttpResponse::Ok().json(serde_json::json!({
+        "replicas": replicas,
+        "count": replicas.len()
+    }))
+}
+
+// POST /api/replication/sync
+// Trigger manual sync on replica
+pub async fn replication_sync(replica: WebReplicationReplica) -> impl Responder {
+    match replica.sync() {
+        Ok(applied_count) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "OK",
+            "applied_entries": applied_count,
+            "message": format!("Synced {} entries from master", applied_count)
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "status": "ERROR",
+            "error": e.to_string()
+        })),
+    }
+}
+
+// GET /api/replication/status
+// Get replica status
+pub async fn replication_status(replica: WebReplicationReplica) -> impl Responder {
+    let status = replica.get_status();
+    HttpResponse::Ok().json(status)
 }

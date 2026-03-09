@@ -40,6 +40,9 @@ pub enum KvStoreError {
     #[error("Store is read-only")]
     ReadOnly,
 
+    #[error("Replication error: {0}")]
+    ReplicationError(String),
+
     #[error("Operation failed: {0}")]
     OperationFailed(String),
 }
