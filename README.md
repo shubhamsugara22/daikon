@@ -240,7 +240,9 @@ rust-kv-store/
 - **Heartbeat Tracking**: Replica heartbeat at `POST /api/replication/heartbeat`
 - **Replica Sync API**: Manual sync `POST /api/replication/sync`, status `GET /api/replication/status`
 - **Replica Health View**: Master lists replicas at `GET /api/replication/replicas`
-- **Environment Configuration**: `KV_MASTER_URL`, `KV_REPLICA_ID`, `KV_REPLICATION_POLL_INTERVAL`
+- **Authentication**: Optional bearer-token auth via `KV_REPLICATION_SECRET`
+- **Idempotency**: Replicas deduplicate resent entries using index tracking + timestamp guards
+- **Environment Configuration**: `KV_MASTER_URL`, `KV_REPLICA_ID`, `KV_REPLICATION_POLL_INTERVAL`, `KV_REPLICATION_SECRET`
 
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
