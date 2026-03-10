@@ -468,8 +468,19 @@ pub struct WalEntriesResponse {
 // Replica sends heartbeat to master and registers itself
 pub async fn replication_heartbeat(
     master: WebReplicationMaster,
+    http_req: actix_web::HttpRequest,
     req: web::Json<HeartbeatRequest>,
 ) -> impl Responder {
+    let token = http_req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+    if !master.verify_auth(token) {
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid or missing authentication token"
+        }));
+    }
     match master.register_replica(req.replica_id.clone(), req.last_applied_index) {
         Ok(_) => HttpResponse::Ok().json(serde_json::json!({
             "status": "OK",
@@ -483,8 +494,19 @@ pub async fn replication_heartbeat(
 // Master serves WAL entries to replicas
 pub async fn replication_get_wal(
     master: WebReplicationMaster,
+    http_req: actix_web::HttpRequest,
     query: web::Query<WalQueryParams>,
 ) -> impl Responder {
+    let token = http_req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+    if !master.verify_auth(token) {
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid or missing authentication token"
+        }));
+    }
     let limit = query.limit.unwrap_or(100);
 
     match master.get_wal_entries(query.from_index, limit) {

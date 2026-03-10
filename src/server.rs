@@ -38,12 +38,20 @@ async fn main() -> std::io::Result<()> {
         _ => ReplicationRole::Master,
     };
     let master_url = env::var("KV_MASTER_URL").ok();
-    let replica_id = env::var("KV_REPLICA_ID")
-        .unwrap_or_else(|_| format!("replica-{}", bind.replace(":", "-")));
+    let replica_id =
+        env::var("KV_REPLICA_ID").unwrap_or_else(|_| format!("replica-{}", bind.replace(":", "-")));
     let replication_poll_interval_secs: u64 = env::var("KV_REPLICATION_POLL_INTERVAL")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
+    // Shared secret between master and replicas.  Set KV_REPLICATION_SECRET on
+    // ALL nodes (master + replicas) to the same value to enable auth.
+    let replication_secret = env::var("KV_REPLICATION_SECRET").ok();
+    if replication_secret.is_some() {
+        info!("Replication auth is ENABLED (KV_REPLICATION_SECRET is set)");
+    } else {
+        info!("Replication auth is DISABLED (set KV_REPLICATION_SECRET to enable)");
+    }
 
     info!("Node role: {:?}", replication_role);
     if replication_role == ReplicationRole::Replica {
@@ -72,7 +80,11 @@ async fn main() -> std::io::Result<()> {
 
     // Initialize replication based on role
     let replication_master = if replication_role == ReplicationRole::Master {
-        Some(Arc::new(ReplicationMaster::new(Arc::clone(&wal), 30)))
+        Some(Arc::new(ReplicationMaster::new(
+            Arc::clone(&wal),
+            30,
+            replication_secret.clone(),
+        )))
     } else {
         None
     };
@@ -125,15 +137,17 @@ async fn main() -> std::io::Result<()> {
             master_url.clone(),
             Arc::clone(&store),
             Arc::clone(&wal),
+            replication_secret.clone(),
         ) {
             Ok(replica) => {
                 info!("Initialized replication replica");
                 let replica = Arc::new(replica);
-                
+
                 // Spawn background sync task
                 let replica_for_sync = Arc::clone(&replica);
                 tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(replication_poll_interval_secs));
+                    let mut interval =
+                        tokio::time::interval(Duration::from_secs(replication_poll_interval_secs));
                     loop {
                         interval.tick().await;
                         match replica_for_sync.sync() {
@@ -148,7 +162,7 @@ async fn main() -> std::io::Result<()> {
                         }
                     }
                 });
-                
+
                 Some(replica)
             }
             Err(e) => {
@@ -224,12 +238,21 @@ async fn main() -> std::io::Result<()> {
                     web::post().to(api::pitr_cleanup_old_snapshots),
                 )
                 // Master replication endpoints (only available in master mode)
-                .route("/replication/heartbeat", web::post().to(api::replication_heartbeat))
+                .route(
+                    "/replication/heartbeat",
+                    web::post().to(api::replication_heartbeat),
+                )
                 .route("/replication/wal", web::get().to(api::replication_get_wal))
-                .route("/replication/replicas", web::get().to(api::replication_list_replicas))
+                .route(
+                    "/replication/replicas",
+                    web::get().to(api::replication_list_replicas),
+                )
                 // Replica replication endpoints (only available in replica mode)
                 .route("/replication/sync", web::post().to(api::replication_sync))
-                .route("/replication/status", web::get().to(api::replication_status)),
+                .route(
+                    "/replication/status",
+                    web::get().to(api::replication_status),
+                ),
         )
     })
     .bind(&bind)?

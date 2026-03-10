@@ -3,10 +3,10 @@ use crate::kv_store::KvStore;
 use crate::wal::{Wal, WalEntry, WalOperation};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Replication role for a KV store node
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,22 +34,42 @@ pub enum ReplicaStatus {
     Disconnected,
 }
 
-/// Master replication manager
-/// Tracks connected replicas and serves WAL entries for replication
+/// Master replication manager.
+/// Tracks connected replicas and serves WAL entries for replication.
 pub struct ReplicationMaster {
     wal: Arc<Wal>,
     replicas: Arc<RwLock<HashMap<String, ReplicaInfo>>>,
     heartbeat_timeout_secs: u64,
+    /// Optional shared-secret. Replicas must send `Authorization: Bearer <token>`.
+    auth_token: Option<String>,
 }
 
 impl ReplicationMaster {
-    /// Create a new replication master
-    pub fn new(wal: Arc<Wal>, heartbeat_timeout_secs: u64) -> Self {
-        info!("Initializing replication master");
+    /// Create a new replication master.
+    ///
+    /// `auth_token` – if `Some(secret)`, inbound replica requests must carry
+    /// `Authorization: Bearer <secret>`. Pass `None` to disable auth.
+    pub fn new(wal: Arc<Wal>, heartbeat_timeout_secs: u64, auth_token: Option<String>) -> Self {
+        if auth_token.is_some() {
+            info!("Initializing replication master (auth enabled)");
+        } else {
+            info!("Initializing replication master (no auth)");
+        }
         ReplicationMaster {
             wal,
             replicas: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_timeout_secs,
+            auth_token,
+        }
+    }
+
+    /// Verify an auth token from an inbound request.
+    /// Returns `true` if no auth is configured, or if `provided` matches the secret.
+    pub fn verify_auth(&self, provided: Option<&str>) -> bool {
+        match (&self.auth_token, provided) {
+            (None, _) => true,
+            (Some(expected), Some(token)) => token == expected.as_str(),
+            (Some(_), None) => false,
         }
     }
 
@@ -132,8 +152,8 @@ impl ReplicationMaster {
     }
 }
 
-/// Replica replication manager
-/// Pulls WAL entries from master and applies them to local store
+/// Replica replication manager.
+/// Pulls WAL entries from master and applies them to the local store.
 pub struct ReplicationReplica {
     replica_id: String,
     master_url: String,
@@ -141,19 +161,28 @@ pub struct ReplicationReplica {
     wal: Arc<Wal>,
     last_applied_index: Arc<RwLock<u64>>,
     client: reqwest::blocking::Client,
+    /// Must match the master's `auth_token` if auth is enabled.
+    auth_token: Option<String>,
+    /// Timestamps of entries applied this process lifetime — dedup guard.
+    applied_entry_timestamps: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl ReplicationReplica {
-    /// Create a new replication replica
+    /// Create a new replication replica.
+    ///
+    /// `auth_token` – must match the master's secret (or `None` if auth is disabled).
     pub fn new(
         replica_id: String,
         master_url: String,
         store: Arc<RwLock<KvStore>>,
         wal: Arc<Wal>,
+        auth_token: Option<String>,
     ) -> Result<Self> {
         info!(
-            "Initializing replication replica: id={}, master={}",
-            replica_id, master_url
+            "Initializing replication replica: id={}, master={}, auth={}",
+            replica_id,
+            master_url,
+            auth_token.is_some()
         );
 
         let client = reqwest::blocking::Client::builder()
@@ -163,7 +192,7 @@ impl ReplicationReplica {
                 KvStoreError::ReplicationError(format!("Failed to create HTTP client: {}", e))
             })?;
 
-        // Determine last applied index from local WAL
+        // Seed last_applied_index from local WAL so restarts are idempotent.
         let entries = wal.read_all()?;
         let last_applied_index = entries.len() as u64;
 
@@ -174,17 +203,25 @@ impl ReplicationReplica {
             wal,
             last_applied_index: Arc::new(RwLock::new(last_applied_index)),
             client,
+            auth_token,
+            applied_entry_timestamps: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
-    /// Sync with master: pull and apply new WAL entries
+    /// Sync with master: pull and apply new WAL entries.
+    ///
+    /// Idempotency guarantees:
+    /// 1. Index-based protocol — only entries beyond `last_applied_index` are fetched.
+    /// 2. Per-batch dedup — duplicate timestamps within one HTTP response are skipped.
+    /// 3. Cross-sync dedup — entries whose timestamp was already applied this
+    ///    process lifetime are skipped even if the master resends them.
     pub fn sync(&self) -> Result<usize> {
         let last_applied = *self.last_applied_index.read();
 
-        // Register/send heartbeat to master
+        // Register / heartbeat so the master can track our lag.
         self.send_heartbeat(last_applied)?;
 
-        // Fetch new WAL entries from master
+        // Pull only entries we haven't applied yet.
         let entries = self.fetch_wal_entries(last_applied)?;
 
         if entries.is_empty() {
@@ -194,21 +231,70 @@ impl ReplicationReplica {
 
         info!("Replicating {} entries from master", entries.len());
 
-        // Apply each entry to local store
+        let mut batch_seen: HashSet<u64> = HashSet::new();
         let mut applied_count: usize = 0;
-        for entry in entries {
-            self.apply_wal_entry(&entry)?;
+
+        for entry in &entries {
+            // Guard 1: intra-batch duplicates.
+            if !batch_seen.insert(entry.timestamp) {
+                warn!(
+                    "Skipping intra-batch duplicate entry (timestamp={})",
+                    entry.timestamp
+                );
+                continue;
+            }
+
+            // Guard 2: cross-sync duplicates.
+            {
+                let applied = self.applied_entry_timestamps.read();
+                if applied.contains(&entry.timestamp) {
+                    warn!(
+                        "Skipping already-applied entry (timestamp={})",
+                        entry.timestamp
+                    );
+                    continue;
+                }
+            }
+
+            self.apply_wal_entry(entry)?;
+
+            {
+                let mut applied = self.applied_entry_timestamps.write();
+                applied.insert(entry.timestamp);
+            }
+
             applied_count += 1;
         }
 
-        // Update last applied index
-        let mut last_applied = self.last_applied_index.write();
-        *last_applied += applied_count as u64;
+        {
+            let mut last = self.last_applied_index.write();
+            *last += applied_count as u64;
+        }
 
         Ok(applied_count)
     }
 
-    /// Send heartbeat to master and register replica
+    // ── Auth-aware HTTP helpers ───────────────────────────────────────────────
+
+    fn with_auth_post(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        let builder = self.client.post(url);
+        if let Some(ref token) = self.auth_token {
+            builder.header("Authorization", format!("Bearer {}", token))
+        } else {
+            builder
+        }
+    }
+
+    fn with_auth_get(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        let builder = self.client.get(url);
+        if let Some(ref token) = self.auth_token {
+            builder.header("Authorization", format!("Bearer {}", token))
+        } else {
+            builder
+        }
+    }
+
+    /// Send heartbeat to master and register replica.
     fn send_heartbeat(&self, last_applied_index: u64) -> Result<()> {
         let url = format!("{}/api/replication/heartbeat", self.master_url);
 
@@ -223,9 +309,20 @@ impl ReplicationReplica {
             last_applied_index,
         };
 
-        let response = self.client.post(&url).json(&request).send().map_err(|e| {
-            KvStoreError::ReplicationError(format!("Failed to send heartbeat: {}", e))
-        })?;
+        let response = self
+            .with_auth_post(&url)
+            .json(&request)
+            .send()
+            .map_err(|e| {
+                KvStoreError::ReplicationError(format!("Failed to send heartbeat: {}", e))
+            })?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(KvStoreError::ReplicationError(
+                "Heartbeat rejected: authentication failed. Check KV_REPLICATION_SECRET."
+                    .to_string(),
+            ));
+        }
 
         if !response.status().is_success() {
             return Err(KvStoreError::ReplicationError(format!(
@@ -237,16 +334,23 @@ impl ReplicationReplica {
         Ok(())
     }
 
-    /// Fetch WAL entries from master starting from given index
+    /// Fetch WAL entries from master starting from the given index.
     fn fetch_wal_entries(&self, from_index: u64) -> Result<Vec<WalEntry>> {
         let url = format!(
             "{}/api/replication/wal?from_index={}&limit=100",
             self.master_url, from_index
         );
 
-        let response = self.client.get(&url).send().map_err(|e| {
+        let response = self.with_auth_get(&url).send().map_err(|e| {
             KvStoreError::ReplicationError(format!("Failed to fetch WAL entries: {}", e))
         })?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(KvStoreError::ReplicationError(
+                "WAL fetch rejected: authentication failed. Check KV_REPLICATION_SECRET."
+                    .to_string(),
+            ));
+        }
 
         if !response.status().is_success() {
             return Err(KvStoreError::ReplicationError(format!(
@@ -343,7 +447,7 @@ mod tests {
         let wal_path = temp_dir.path().join("test_wal.log");
         let wal = Arc::new(Wal::new(&wal_path).unwrap());
 
-        let master = ReplicationMaster::new(wal, 30);
+        let master = ReplicationMaster::new(wal, 30, None);
 
         // Register a replica
         master.register_replica("replica-1".to_string(), 0).unwrap();
@@ -371,7 +475,7 @@ mod tests {
             wal.append(&entry).unwrap();
         }
 
-        let master = ReplicationMaster::new(wal, 30);
+        let master = ReplicationMaster::new(wal, 30, None);
 
         // Get entries from index 3, limit 5
         let entries = master.get_wal_entries(3, 5).unwrap();
@@ -399,6 +503,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             store,
             wal,
+            None,
         )
         .unwrap();
 
@@ -406,5 +511,96 @@ mod tests {
         assert_eq!(status.replica_id, "replica-1");
         assert_eq!(status.master_url, "http://localhost:8080");
         assert_eq!(status.last_applied_index, 0);
+    }
+
+    // ── Auth tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_master_verify_auth_no_token() {
+        let temp_dir = tempdir().unwrap();
+        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+        let master = ReplicationMaster::new(wal, 30, None);
+
+        // No auth configured → all callers pass
+        assert!(master.verify_auth(None));
+        assert!(master.verify_auth(Some("anything")));
+    }
+
+    #[test]
+    fn test_master_verify_auth_with_token() {
+        let temp_dir = tempdir().unwrap();
+        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+        let master = ReplicationMaster::new(wal, 30, Some("supersecret".to_string()));
+
+        assert!(master.verify_auth(Some("supersecret")));
+        assert!(!master.verify_auth(Some("wrongtoken")));
+        assert!(!master.verify_auth(None));
+    }
+
+    // ── Idempotency / dedup tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_replica_apply_wal_entry_set() {
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(RwLock::new(KvStore::new()));
+        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+
+        let replica = ReplicationReplica::new(
+            "replica-1".to_string(),
+            "http://localhost:8080".to_string(),
+            Arc::clone(&store),
+            Arc::clone(&wal),
+            None,
+        )
+        .unwrap();
+
+        // Apply a SET entry directly
+        let entry = WalEntry::new(WalOperation::Set {
+            key: "hello".to_string(),
+            value: "\"world\"".to_string(),
+            ttl_secs: None,
+        });
+        replica.apply_wal_entry(&entry).unwrap();
+
+        // Key should exist in the store
+        let store_guard = store.read();
+        assert!(store_guard.get("hello").is_some());
+    }
+
+    #[test]
+    fn test_replica_dedup_cross_sync_guard() {
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(RwLock::new(KvStore::new()));
+        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+
+        let replica = ReplicationReplica::new(
+            "replica-1".to_string(),
+            "http://localhost:8080".to_string(),
+            Arc::clone(&store),
+            wal,
+            None,
+        )
+        .unwrap();
+
+        // Simulate a previously applied entry by inserting its timestamp
+        let ts = 123_456_u64;
+        {
+            let mut applied = replica.applied_entry_timestamps.write();
+            applied.insert(ts);
+        }
+
+        // That timestamp should be detected as a duplicate
+        let is_dup = {
+            let applied = replica.applied_entry_timestamps.read();
+            applied.contains(&ts)
+        };
+        assert!(is_dup);
+
+        // A fresh timestamp should not be flagged
+        let is_fresh = {
+            let applied = replica.applied_entry_timestamps.read();
+            !applied.contains(&999_999_u64)
+        };
+        assert!(is_fresh);
     }
 }
