@@ -41,6 +41,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 
 ### Comprehensive Testing
 - **49 Total Tests**: 17 library tests (incl. WAL + PITR + replication tests) + 7 API endpoint tests + 25 integration tests
+- **51 Total Tests**: 17 library tests (incl. WAL + PITR + replication tests) + 7 API endpoint tests + 27 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -316,6 +317,7 @@ The following production hardening features have been implemented and fully test
 
 ### Test Coverage
 - **49 Total Tests**: 17 library tests + 7 API endpoint tests + 25 integration tests, all passing with 100% success rate
+- **51 Total Tests**: 17 library tests + 7 API endpoint tests + 27 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
