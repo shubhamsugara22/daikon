@@ -67,7 +67,8 @@ fn test_replica_sync_with_auth_success_and_failure() {
                     async move {
                         if ok {
                             HttpResponse::Ok().json(serde_json::json!({
-                                "entries": [response_entry]
+                                "entries": [response_entry],
+                                "total_entries": 1
                             }))
                         } else {
                             HttpResponse::Unauthorized().finish()
@@ -147,7 +148,8 @@ fn test_replica_sync_deduplicates_resent_entries() {
                     async move {
                         if ok {
                             HttpResponse::Ok().json(serde_json::json!({
-                                "entries": [response_entry]
+                                "entries": [response_entry],
+                                "total_entries": 1
                             }))
                         } else {
                             HttpResponse::Unauthorized().finish()
@@ -178,6 +180,9 @@ fn test_replica_sync_deduplicates_resent_entries() {
 
     let status = replica.get_status();
     assert_eq!(status.last_applied_index, 1);
+    assert_eq!(status.lag_entries, 0);
+    assert!(status.last_successful_sync_unix_secs.is_some());
+    assert!(status.last_sync_duration_ms.is_some());
     assert!(store.read().get("dup:key").is_some());
 }
 
@@ -217,7 +222,8 @@ fn test_replica_sync_no_token_rejected() {
                     async move {
                         if ok {
                             HttpResponse::Ok().json(serde_json::json!({
-                                "entries": [response_entry]
+                                "entries": [response_entry],
+                                "total_entries": 1
                             }))
                         } else {
                             HttpResponse::Unauthorized()
@@ -278,7 +284,8 @@ fn test_master_no_auth_accepts_any_replica() {
                     let response_entry = if has_token { e1.clone() } else { e2.clone() };
                     async move {
                         HttpResponse::Ok().json(serde_json::json!({
-                            "entries": [response_entry]
+                            "entries": [response_entry],
+                            "total_entries": 1
                         }))
                     }
                 }),
