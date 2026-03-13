@@ -245,6 +245,19 @@ rust-kv-store/
 - **Idempotency**: Replicas deduplicate resent entries using index tracking + timestamp guards
 - **Environment Configuration**: `KV_MASTER_URL`, `KV_REPLICA_ID`, `KV_REPLICATION_POLL_INTERVAL`, `KV_REPLICATION_SECRET`
 
+**Example `GET /api/replication/status` response:**
+
+```json
+{
+  "replica_id": "replica-1",
+  "master_url": "http://localhost:8080",
+  "last_applied_index": 42,
+  "lag_entries": 0,
+  "last_successful_sync_unix_secs": 1741920000,
+  "last_sync_duration_ms": 7
+}
+```
+
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
 - `Mutex` still used in server startup path (partial migration)
