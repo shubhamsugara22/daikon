@@ -5,7 +5,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 /// Replication role for a KV store node
@@ -165,6 +165,12 @@ pub struct ReplicationReplica {
     auth_token: Option<String>,
     /// Timestamps of entries applied this process lifetime — dedup guard.
     applied_entry_timestamps: Arc<RwLock<HashSet<u64>>>,
+    /// Last successful sync completion time (unix secs).
+    last_successful_sync_unix_secs: Arc<RwLock<Option<u64>>>,
+    /// Last successful sync duration in milliseconds.
+    last_sync_duration_ms: Arc<RwLock<Option<u64>>>,
+    /// Last observed replica lag in entries.
+    lag_entries: Arc<RwLock<u64>>,
 }
 
 impl ReplicationReplica {
@@ -205,6 +211,9 @@ impl ReplicationReplica {
             client,
             auth_token,
             applied_entry_timestamps: Arc::new(RwLock::new(HashSet::new())),
+            last_successful_sync_unix_secs: Arc::new(RwLock::new(None)),
+            last_sync_duration_ms: Arc::new(RwLock::new(None)),
+            lag_entries: Arc::new(RwLock::new(0)),
         })
     }
 
@@ -216,15 +225,36 @@ impl ReplicationReplica {
     /// 3. Cross-sync dedup — entries whose timestamp was already applied this
     ///    process lifetime are skipped even if the master resends them.
     pub fn sync(&self) -> Result<usize> {
+        let sync_started = Instant::now();
         let last_applied = *self.last_applied_index.read();
 
         // Register / heartbeat so the master can track our lag.
         self.send_heartbeat(last_applied)?;
 
         // Pull only entries we haven't applied yet.
-        let entries = self.fetch_wal_entries(last_applied)?;
+        let (entries, total_entries) = self.fetch_wal_entries(last_applied)?;
 
         if entries.is_empty() {
+            {
+                let mut lag = self.lag_entries.write();
+                *lag = total_entries.saturating_sub(last_applied);
+            }
+
+            let sync_finished_unix_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let duration_ms = sync_started.elapsed().as_millis() as u64;
+
+            {
+                let mut last_sync = self.last_successful_sync_unix_secs.write();
+                *last_sync = Some(sync_finished_unix_secs);
+            }
+            {
+                let mut last_duration = self.last_sync_duration_ms.write();
+                *last_duration = Some(duration_ms);
+            }
+
             debug!("No new entries to replicate");
             return Ok(0);
         }
@@ -269,6 +299,27 @@ impl ReplicationReplica {
         {
             let mut last = self.last_applied_index.write();
             *last += applied_count as u64;
+        }
+
+        let latest_applied = *self.last_applied_index.read();
+        {
+            let mut lag = self.lag_entries.write();
+            *lag = total_entries.saturating_sub(latest_applied);
+        }
+
+        let sync_finished_unix_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let duration_ms = sync_started.elapsed().as_millis() as u64;
+
+        {
+            let mut last_sync = self.last_successful_sync_unix_secs.write();
+            *last_sync = Some(sync_finished_unix_secs);
+        }
+        {
+            let mut last_duration = self.last_sync_duration_ms.write();
+            *last_duration = Some(duration_ms);
         }
 
         Ok(applied_count)
@@ -335,7 +386,7 @@ impl ReplicationReplica {
     }
 
     /// Fetch WAL entries from master starting from the given index.
-    fn fetch_wal_entries(&self, from_index: u64) -> Result<Vec<WalEntry>> {
+    fn fetch_wal_entries(&self, from_index: u64) -> Result<(Vec<WalEntry>, u64)> {
         let url = format!(
             "{}/api/replication/wal?from_index={}&limit=100",
             self.master_url, from_index
@@ -362,13 +413,14 @@ impl ReplicationReplica {
         #[derive(Deserialize)]
         struct WalResponse {
             entries: Vec<WalEntry>,
+            total_entries: u64,
         }
 
         let wal_response: WalResponse = response.json().map_err(|e| {
             KvStoreError::ReplicationError(format!("Failed to parse WAL response: {}", e))
         })?;
 
-        Ok(wal_response.entries)
+        Ok((wal_response.entries, wal_response.total_entries))
     }
 
     /// Apply a WAL entry to the local store
@@ -420,11 +472,17 @@ impl ReplicationReplica {
     /// Get current replication status
     pub fn get_status(&self) -> ReplicationStatus {
         let last_applied = *self.last_applied_index.read();
+        let lag_entries = *self.lag_entries.read();
+        let last_successful_sync_unix_secs = *self.last_successful_sync_unix_secs.read();
+        let last_sync_duration_ms = *self.last_sync_duration_ms.read();
 
         ReplicationStatus {
             replica_id: self.replica_id.clone(),
             master_url: self.master_url.clone(),
             last_applied_index: last_applied,
+            lag_entries,
+            last_successful_sync_unix_secs,
+            last_sync_duration_ms,
         }
     }
 }
@@ -434,6 +492,9 @@ pub struct ReplicationStatus {
     pub replica_id: String,
     pub master_url: String,
     pub last_applied_index: u64,
+    pub lag_entries: u64,
+    pub last_successful_sync_unix_secs: Option<u64>,
+    pub last_sync_duration_ms: Option<u64>,
 }
 
 #[cfg(test)]
@@ -511,6 +572,9 @@ mod tests {
         assert_eq!(status.replica_id, "replica-1");
         assert_eq!(status.master_url, "http://localhost:8080");
         assert_eq!(status.last_applied_index, 0);
+        assert_eq!(status.lag_entries, 0);
+        assert_eq!(status.last_successful_sync_unix_secs, None);
+        assert_eq!(status.last_sync_duration_ms, None);
     }
 
     // ── Auth tests ────────────────────────────────────────────────────────────
