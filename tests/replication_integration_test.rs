@@ -5,6 +5,7 @@ use rust_kv_store::kv_store::KvStore;
 use rust_kv_store::replication::ReplicationReplica;
 use rust_kv_store::wal::{Wal, WalEntry, WalOperation};
 use serde::Deserialize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -327,4 +328,135 @@ fn test_master_no_auth_accepts_any_replica() {
     let applied2 = replica_no_token.sync().unwrap();
     assert_eq!(applied2, 1);
     assert!(store2.read().get("compat:no-token").is_some());
+}
+
+#[test]
+fn test_replica_sync_recovers_after_transient_master_failures() {
+    let hb_attempts = Arc::new(AtomicUsize::new(0));
+    let wal_attempts = Arc::new(AtomicUsize::new(0));
+    let entry = fixed_set_entry(6_666_666, "recovery:key", "recovered");
+
+    let srv = start(move || {
+        let hb_counter = Arc::clone(&hb_attempts);
+        let wal_counter = Arc::clone(&wal_attempts);
+        let wal_entry = entry.clone();
+
+        App::new()
+            .route(
+                "/api/replication/heartbeat",
+                web::post().to(move || {
+                    let n = hb_counter.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if n == 0 {
+                            HttpResponse::InternalServerError().finish()
+                        } else {
+                            HttpResponse::Ok().json(serde_json::json!({"status":"OK"}))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/replication/wal",
+                web::get().to(move |_req: HttpRequest, _q: web::Query<WalQuery>| {
+                    let n = wal_counter.fetch_add(1, Ordering::SeqCst);
+                    let response_entry = wal_entry.clone();
+                    async move {
+                        if n == 0 {
+                            HttpResponse::ServiceUnavailable().finish()
+                        } else {
+                            HttpResponse::Ok().json(serde_json::json!({
+                                "entries": [response_entry],
+                                "total_entries": 1
+                            }))
+                        }
+                    }
+                }),
+            )
+    });
+
+    let td = tempdir().unwrap();
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let wal = Arc::new(Wal::new(td.path().join("transient.wal")).unwrap());
+    let replica = ReplicationReplica::new(
+        "replica-transient".to_string(),
+        srv.url("").trim_end_matches('/').to_string(),
+        Arc::clone(&store),
+        wal,
+        None,
+    )
+    .unwrap();
+
+    let first_err = replica.sync().unwrap_err().to_string();
+    assert!(first_err.contains("Heartbeat failed"));
+
+    let second_err = replica.sync().unwrap_err().to_string();
+    assert!(second_err.contains("Fetch WAL failed") || second_err.contains("503"));
+
+    let third = replica.sync().unwrap();
+    assert_eq!(third, 1);
+    assert!(store.read().get("recovery:key").is_some());
+}
+
+#[test]
+fn test_replica_sync_handles_out_of_order_and_duplicate_timestamps() {
+    let entry_a = fixed_set_entry(7_777_777, "order:key", "first");
+    let entry_b = fixed_set_entry(7_000_000, "order:other", "value");
+    let entry_a_dup = fixed_set_entry(7_777_777, "order:key", "second");
+
+    let srv = start(move || {
+        let e1 = entry_a.clone();
+        let e2 = entry_b.clone();
+        let e3 = entry_a_dup.clone();
+
+        App::new()
+            .route(
+                "/api/replication/heartbeat",
+                web::post()
+                    .to(|| async { HttpResponse::Ok().json(serde_json::json!({"status":"OK"})) }),
+            )
+            .route(
+                "/api/replication/wal",
+                web::get().to(move |_req: HttpRequest, _q: web::Query<WalQuery>| {
+                    let a = e1.clone();
+                    let b = e2.clone();
+                    let a_dup = e3.clone();
+                    async move {
+                        HttpResponse::Ok().json(serde_json::json!({
+                            "entries": [a, b, a_dup],
+                            "total_entries": 3
+                        }))
+                    }
+                }),
+            )
+    });
+
+    let td = tempdir().unwrap();
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let wal = Arc::new(Wal::new(td.path().join("order-and-dup.wal")).unwrap());
+    let replica = ReplicationReplica::new(
+        "replica-order-dup".to_string(),
+        srv.url("").trim_end_matches('/').to_string(),
+        Arc::clone(&store),
+        wal,
+        None,
+    )
+    .unwrap();
+
+    let applied = replica.sync().unwrap();
+    assert_eq!(
+        applied, 2,
+        "Expected duplicate timestamp entry to be skipped"
+    );
+
+    let guard = store.read();
+    let v_order = guard.get("order:key").unwrap().to_string();
+    let v_other = guard.get("order:other").unwrap().to_string();
+    drop(guard);
+
+    assert_eq!(v_order, "first");
+    assert_eq!(v_other, "value");
+
+    let status = replica.get_status();
+    assert_eq!(status.last_applied_index, 2);
+    assert_eq!(status.lag_entries, 1);
 }
