@@ -1,6 +1,8 @@
 use actix_web::{test, web, App};
 use parking_lot::RwLock;
-use rust_kv_store::{api, kv_store::KvStore, pitr::Pitr, wal::Wal};
+use rust_kv_store::{
+    api, kv_store::KvStore, pitr::Pitr, replication::ReplicationReplica, wal::Wal,
+};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -135,4 +137,62 @@ async fn test_api_pitr_stats_endpoint() {
     let req = test::TestRequest::get().uri("/api/pitr/stats").to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
+}
+
+/// Verify GET /api/replication/status returns 200 and includes the three
+/// replica observability metric fields introduced in the lag/metrics pass.
+#[actix_web::test]
+async fn test_api_replication_status_shape() {
+    let temp_dir = TempDir::new().unwrap();
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let wal = Arc::new(Wal::new(temp_dir.path().join("replica.wal")).unwrap());
+    let replica = Arc::new(
+        ReplicationReplica::new(
+            "test-replica".to_string(),
+            "http://localhost:9999".to_string(), // unreachable; no sync is called
+            store,
+            wal,
+            None,
+        )
+        .unwrap(),
+    );
+
+    let app = test::init_service(App::new().app_data(web::Data::from(replica)).service(
+        web::scope("/api").route(
+            "/replication/status",
+            web::get().to(api::replication_status),
+        ),
+    ))
+    .await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/replication/status")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+
+    // Core identity fields
+    assert_eq!(body["replica_id"], "test-replica");
+    assert_eq!(body["last_applied_index"], 0);
+
+    // Observability metric fields must be present
+    assert!(
+        body.get("lag_entries").is_some(),
+        "lag_entries field missing"
+    );
+    assert_eq!(body["lag_entries"], 0);
+
+    // Before any sync these are null / JSON null
+    assert!(
+        body.get("last_successful_sync_unix_secs").is_some(),
+        "last_successful_sync_unix_secs field missing"
+    );
+    assert!(
+        body.get("last_sync_duration_ms").is_some(),
+        "last_sync_duration_ms field missing"
+    );
+    assert!(body["last_successful_sync_unix_secs"].is_null());
+    assert!(body["last_sync_duration_ms"].is_null());
 }
