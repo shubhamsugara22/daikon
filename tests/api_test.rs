@@ -195,4 +195,9 @@ async fn test_api_replication_status_shape() {
     );
     assert!(body["last_successful_sync_unix_secs"].is_null());
     assert!(body["last_sync_duration_ms"].is_null());
+
+    // reqwest::blocking::Client owns an internal Tokio runtime; dropping it
+    // from within an async context panics. We leak `app` (test-only) to avoid
+    // the drop-in-async-context panic.
+    std::mem::forget(app);
 }
