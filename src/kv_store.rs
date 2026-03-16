@@ -1,16 +1,33 @@
 use crate::config::StoreConfig;
 use crate::error::{KvStoreError, Result};
+use flate2::Compression;
+use flate2::{read::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileCompression {
+    None,
+    Gzip,
+    Zstd,
+}
+
+fn compression_for_path(path: &Path) -> FileCompression {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("gz") => FileCompression::Gzip,
+        Some("zst") => FileCompression::Zstd,
+        _ => FileCompression::None,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreStats {
@@ -578,8 +595,25 @@ impl KvStore {
         &self,
         path: P,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let path = path.as_ref();
         let file = File::create(path)?;
-        serde_json::to_writer_pretty(file, &self)?;
+        match compression_for_path(path) {
+            FileCompression::None => {
+                let writer = BufWriter::new(file);
+                serde_json::to_writer_pretty(writer, &self)?;
+            }
+            FileCompression::Gzip => {
+                let writer = BufWriter::new(file);
+                let encoder = GzEncoder::new(writer, Compression::default());
+                serde_json::to_writer_pretty(encoder, &self)?;
+            }
+            FileCompression::Zstd => {
+                let writer = BufWriter::new(file);
+                let mut encoder = zstd::Encoder::new(writer, 3)?;
+                serde_json::to_writer_pretty(&mut encoder, &self)?;
+                encoder.finish()?;
+            }
+        }
         Ok(())
     }
 
@@ -610,9 +644,24 @@ impl KvStore {
     pub fn load_from_file<P: AsRef<Path>>(
         path: P,
     ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        let path = path.as_ref();
         let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut store: KvStore = serde_json::from_reader(reader)?;
+        let mut store: KvStore = match compression_for_path(path) {
+            FileCompression::None => {
+                let reader = BufReader::new(file);
+                serde_json::from_reader(reader)?
+            }
+            FileCompression::Gzip => {
+                let reader = BufReader::new(file);
+                let decoder = GzDecoder::new(reader);
+                serde_json::from_reader(decoder)?
+            }
+            FileCompression::Zstd => {
+                let reader = BufReader::new(file);
+                let decoder = zstd::Decoder::new(reader)?;
+                serde_json::from_reader(decoder)?
+            }
+        };
         // Reinitialize transient fields
         store.lru_order = store.store.keys().cloned().collect();
         Ok(store)
@@ -627,6 +676,7 @@ impl KvStore {
         max_versions: usize,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let path = path.as_ref();
+        let compression = compression_for_path(path);
 
         // If existing file present, create a timestamped backup next to it
         if path.exists() {
@@ -670,10 +720,30 @@ impl KvStore {
         }
 
         // Atomic write: write to temp file then rename
-        let tmp_path = path.with_extension("tmp");
+        let tmp_path = if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            path.with_extension(format!("{}.tmp", ext))
+        } else {
+            path.with_extension("tmp")
+        };
         {
             let file = File::create(&tmp_path)?;
-            serde_json::to_writer_pretty(file, &self)?;
+            match compression {
+                FileCompression::None => {
+                    let writer = BufWriter::new(file);
+                    serde_json::to_writer_pretty(writer, &self)?;
+                }
+                FileCompression::Gzip => {
+                    let writer = BufWriter::new(file);
+                    let encoder = GzEncoder::new(writer, Compression::default());
+                    serde_json::to_writer_pretty(encoder, &self)?;
+                }
+                FileCompression::Zstd => {
+                    let writer = BufWriter::new(file);
+                    let mut encoder = zstd::Encoder::new(writer, 3)?;
+                    serde_json::to_writer_pretty(&mut encoder, &self)?;
+                    encoder.finish()?;
+                }
+            }
         }
         fs::rename(&tmp_path, path)?;
 

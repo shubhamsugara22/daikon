@@ -80,6 +80,38 @@ fn test_save_and_load() {
 }
 
 #[test]
+fn test_save_and_load_gzip() {
+    let mut store = KvStore::new();
+    store.set("k1".to_string(), "v1".to_string()).unwrap();
+
+    let mut path = env::temp_dir();
+    path.push("kv_store_test.json.gz");
+
+    store.save_to_file(&path).expect("gzip save failed");
+    let loaded = KvStore::load_from_file(&path).expect("gzip load failed");
+
+    assert_eq!(loaded.get("k1"), Some(&Value::Str("v1".to_string())));
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn test_save_and_load_zstd() {
+    let mut store = KvStore::new();
+    store.set("k1".to_string(), "v1".to_string()).unwrap();
+
+    let mut path = env::temp_dir();
+    path.push("kv_store_test.json.zst");
+
+    store.save_to_file(&path).expect("zstd save failed");
+    let loaded = KvStore::load_from_file(&path).expect("zstd load failed");
+
+    assert_eq!(loaded.get("k1"), Some(&Value::Str("v1".to_string())));
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
 fn test_set_and_get() {
     let mut store = KvStore::new();
     store.set("alpha".to_string(), "beta".to_string()).unwrap();

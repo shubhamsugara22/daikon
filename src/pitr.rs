@@ -1,11 +1,56 @@
 use crate::error::{KvStoreError, Result};
 use crate::kv_store::KvStore;
 use crate::wal::{Wal, WalEntry, WalOperation};
+use flate2::Compression;
+use flate2::{read::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotCompression {
+    None,
+    Gzip,
+    Zstd,
+}
+
+impl SnapshotCompression {
+    fn from_env_var() -> Self {
+        match std::env::var("KV_SNAPSHOT_COMPRESSION")
+            .unwrap_or_else(|_| "none".to_string())
+            .to_lowercase()
+            .as_str()
+        {
+            "gzip" | "gz" => SnapshotCompression::Gzip,
+            "zstd" | "zst" => SnapshotCompression::Zstd,
+            _ => SnapshotCompression::None,
+        }
+    }
+
+    fn file_suffix(self) -> &'static str {
+        match self {
+            SnapshotCompression::None => ".json",
+            SnapshotCompression::Gzip => ".json.gz",
+            SnapshotCompression::Zstd => ".json.zst",
+        }
+    }
+
+    fn from_snapshot_filename(filename: &str) -> Option<Self> {
+        if filename.ends_with(".json") {
+            Some(SnapshotCompression::None)
+        } else if filename.ends_with(".json.gz") {
+            Some(SnapshotCompression::Gzip)
+        } else if filename.ends_with(".json.zst") {
+            Some(SnapshotCompression::Zstd)
+        } else {
+            None
+        }
+    }
+}
 
 /// Snapshot metadata for Point-in-Time Recovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,24 +66,45 @@ pub struct SnapshotMetadata {
 pub struct Pitr {
     snapshots_dir: PathBuf,
     wal: std::sync::Arc<Wal>,
+    snapshot_compression: SnapshotCompression,
 }
 
 impl Pitr {
     fn extract_snapshot_timestamp(filename: &str) -> Option<u64> {
-        let core = filename.strip_prefix("snapshot_")?.strip_suffix(".json")?;
+        let core = filename
+            .strip_prefix("snapshot_")?
+            .strip_suffix(".json")
+            .or_else(|| filename.strip_prefix("snapshot_")?.strip_suffix(".json.gz"))
+            .or_else(|| {
+                filename
+                    .strip_prefix("snapshot_")?
+                    .strip_suffix(".json.zst")
+            })?;
         let ts_part = core.split('_').next()?;
         ts_part.parse::<u64>().ok()
     }
 
     /// Create a new PITR manager
     pub fn new<P: AsRef<Path>>(snapshots_dir: P, wal: std::sync::Arc<Wal>) -> Result<Self> {
+        Self::new_with_compression(snapshots_dir, wal, SnapshotCompression::from_env_var())
+    }
+
+    fn new_with_compression<P: AsRef<Path>>(
+        snapshots_dir: P,
+        wal: std::sync::Arc<Wal>,
+        snapshot_compression: SnapshotCompression,
+    ) -> Result<Self> {
         let snapshots_dir = snapshots_dir.as_ref().to_path_buf();
         fs::create_dir_all(&snapshots_dir)?;
         info!(
             "Initialized PITR with snapshots directory: {}",
             snapshots_dir.display()
         );
-        Ok(Pitr { snapshots_dir, wal })
+        Ok(Pitr {
+            snapshots_dir,
+            wal,
+            snapshot_compression,
+        })
     }
 
     /// Create a snapshot of the current database state
@@ -49,20 +115,45 @@ impl Pitr {
             .unwrap_or_default()
             .as_secs();
 
-        let mut snapshot_filename = format!("snapshot_{}.json", timestamp);
+        let mut snapshot_filename = format!(
+            "snapshot_{}{}",
+            timestamp,
+            self.snapshot_compression.file_suffix()
+        );
         let mut snapshot_path = self.snapshots_dir.join(&snapshot_filename);
         let mut suffix = 1u64;
         while snapshot_path.exists() {
-            snapshot_filename = format!("snapshot_{}_{}.json", timestamp, suffix);
+            snapshot_filename = format!(
+                "snapshot_{}_{}{}",
+                timestamp,
+                suffix,
+                self.snapshot_compression.file_suffix()
+            );
             snapshot_path = self.snapshots_dir.join(&snapshot_filename);
             suffix += 1;
         }
 
-        // Serialize the store state
-        let store_json = serde_json::to_string_pretty(&store)
-            .map_err(|e| KvStoreError::SerializationError(e))?;
-
-        fs::write(&snapshot_path, store_json).map_err(|e| KvStoreError::IoError(e))?;
+        let file = File::create(&snapshot_path).map_err(|e| KvStoreError::IoError(e))?;
+        match self.snapshot_compression {
+            SnapshotCompression::None => {
+                let writer = BufWriter::new(file);
+                serde_json::to_writer_pretty(writer, &store)
+                    .map_err(|e| KvStoreError::SerializationError(e))?;
+            }
+            SnapshotCompression::Gzip => {
+                let writer = BufWriter::new(file);
+                let encoder = GzEncoder::new(writer, Compression::default());
+                serde_json::to_writer_pretty(encoder, &store)
+                    .map_err(|e| KvStoreError::SerializationError(e))?;
+            }
+            SnapshotCompression::Zstd => {
+                let writer = BufWriter::new(file);
+                let mut encoder = zstd::Encoder::new(writer, 3).map_err(KvStoreError::IoError)?;
+                serde_json::to_writer_pretty(&mut encoder, &store)
+                    .map_err(|e| KvStoreError::SerializationError(e))?;
+                encoder.finish().map_err(KvStoreError::IoError)?;
+            }
+        }
 
         let num_keys = store.len();
         let num_operations = self.wal.read_all()?.len() as u64;
@@ -90,7 +181,7 @@ impl Pitr {
             let entry = entry.map_err(|e| KvStoreError::IoError(e))?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+            if path.is_file() {
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                     if filename.starts_with("snapshot_") {
                         if let Some(timestamp) = Self::extract_snapshot_timestamp(filename) {
@@ -122,11 +213,34 @@ impl Pitr {
         let mut store = if let Some(snapshot) = base_snapshot {
             // Load from snapshot
             let snapshot_path = self.snapshots_dir.join(&snapshot.snapshot_file);
-            let snapshot_data =
-                fs::read_to_string(&snapshot_path).map_err(|e| KvStoreError::IoError(e))?;
+            let file = File::open(&snapshot_path).map_err(|e| KvStoreError::IoError(e))?;
+            let compression = SnapshotCompression::from_snapshot_filename(&snapshot.snapshot_file)
+                .ok_or_else(|| {
+                    KvStoreError::OperationFailed(format!(
+                        "Unsupported snapshot extension: {}",
+                        snapshot.snapshot_file
+                    ))
+                })?;
 
-            serde_json::from_str::<KvStore>(&snapshot_data)
-                .map_err(|e| KvStoreError::SerializationError(e))?
+            match compression {
+                SnapshotCompression::None => {
+                    let reader = BufReader::new(file);
+                    serde_json::from_reader(reader)
+                        .map_err(|e| KvStoreError::SerializationError(e))?
+                }
+                SnapshotCompression::Gzip => {
+                    let reader = BufReader::new(file);
+                    let decoder = GzDecoder::new(reader);
+                    serde_json::from_reader(decoder)
+                        .map_err(|e| KvStoreError::SerializationError(e))?
+                }
+                SnapshotCompression::Zstd => {
+                    let reader = BufReader::new(file);
+                    let decoder = zstd::Decoder::new(reader).map_err(KvStoreError::IoError)?;
+                    serde_json::from_reader(decoder)
+                        .map_err(|e| KvStoreError::SerializationError(e))?
+                }
+            }
         } else {
             // No snapshot found, start from empty store
             KvStore::new()
@@ -183,7 +297,7 @@ impl Pitr {
             let entry = entry.map_err(|e| KvStoreError::IoError(e))?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+            if path.is_file() {
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                     if filename.starts_with("snapshot_") {
                         if let Some(timestamp) = Self::extract_snapshot_timestamp(filename) {
@@ -318,5 +432,43 @@ mod tests {
         let stats = pitr.get_recovery_stats().unwrap();
         assert_eq!(stats.total_snapshots, 0);
         assert_eq!(stats.total_wal_entries, 0);
+    }
+
+    #[test]
+    fn test_pitr_snapshot_gzip_roundtrip() {
+        let temp_dir = TempDir::new().unwrap();
+        let snapshots_dir = temp_dir.path().join("snapshots");
+        let wal_dir = temp_dir.path().join("wal");
+        let wal = std::sync::Arc::new(Wal::new(wal_dir.join("test.wal")).unwrap());
+
+        let pitr =
+            Pitr::new_with_compression(snapshots_dir, wal, SnapshotCompression::Gzip).unwrap();
+        let mut store = KvStore::new();
+        store.set("k".to_string(), "v".to_string()).unwrap();
+
+        let metadata = pitr.create_snapshot(&store).unwrap();
+        assert!(metadata.snapshot_file.ends_with(".json.gz"));
+
+        let restored = pitr.recover_to_latest_snapshot().unwrap();
+        assert!(restored.get("k").is_some());
+    }
+
+    #[test]
+    fn test_pitr_snapshot_zstd_roundtrip() {
+        let temp_dir = TempDir::new().unwrap();
+        let snapshots_dir = temp_dir.path().join("snapshots");
+        let wal_dir = temp_dir.path().join("wal");
+        let wal = std::sync::Arc::new(Wal::new(wal_dir.join("test.wal")).unwrap());
+
+        let pitr =
+            Pitr::new_with_compression(snapshots_dir, wal, SnapshotCompression::Zstd).unwrap();
+        let mut store = KvStore::new();
+        store.set("k".to_string(), "v".to_string()).unwrap();
+
+        let metadata = pitr.create_snapshot(&store).unwrap();
+        assert!(metadata.snapshot_file.ends_with(".json.zst"));
+
+        let restored = pitr.recover_to_latest_snapshot().unwrap();
+        assert!(restored.get("k").is_some());
     }
 }

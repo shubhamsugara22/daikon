@@ -32,6 +32,10 @@ pub struct StoreConfig {
     #[serde(default = "default_persist_path")]
     pub persist_path: PathBuf,
 
+    /// Automatic snapshot interval in seconds (0 = disabled)
+    #[serde(default = "default_snapshot_interval_secs")]
+    pub snapshot_interval_secs: u64,
+
     /// Number of backup versions to keep
     #[serde(default = "default_backup_versions")]
     pub backup_versions: usize,
@@ -51,6 +55,7 @@ impl Default for StoreConfig {
             lru_eviction_enabled: default_lru_enabled(),
             ttl_cleanup_interval_secs: default_ttl_cleanup_interval(),
             persist_path: default_persist_path(),
+            snapshot_interval_secs: default_snapshot_interval_secs(),
             backup_versions: default_backup_versions(),
             enable_logging: default_enable_logging(),
         }
@@ -84,6 +89,10 @@ fn default_ttl_cleanup_interval() -> u64 {
 
 fn default_persist_path() -> PathBuf {
     PathBuf::from("store.json")
+}
+
+fn default_snapshot_interval_secs() -> u64 {
+    0
 }
 
 fn default_backup_versions() -> usize {
@@ -140,6 +149,7 @@ mod tests {
         let config = StoreConfig::default();
         assert!(config.validate().is_ok());
         assert_eq!(config.max_key_size, 1024);
+        assert_eq!(config.snapshot_interval_secs, 0);
         assert_eq!(config.backup_versions, 3);
     }
 

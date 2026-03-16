@@ -28,6 +28,10 @@ async fn main() -> std::io::Result<()> {
     let wal_path = PathBuf::from(env::var("KV_WAL_PATH").unwrap_or_else(|_| "server.wal".into()));
     let snapshots_dir =
         PathBuf::from(env::var("KV_SNAPSHOTS_DIR").unwrap_or_else(|_| "snapshots".into()));
+    let snapshot_interval_secs: u64 = env::var("KV_SNAPSHOT_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     // Replication configuration
     let node_role = env::var("KV_NODE_ROLE")
@@ -129,6 +133,40 @@ async fn main() -> std::io::Result<()> {
     let store = Arc::new(RwLock::new(kv_store));
     let store_for_shutdown = Arc::clone(&store);
     let store_path_for_shutdown = store_path.clone();
+
+    if snapshot_interval_secs > 0 {
+        info!(
+            "Automatic snapshots ENABLED every {}s (KV_SNAPSHOT_INTERVAL_SECS)",
+            snapshot_interval_secs
+        );
+
+        let store_for_snapshots = Arc::clone(&store);
+        let pitr_for_snapshots = Arc::clone(&pitr);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(snapshot_interval_secs));
+            // Consume the immediate first tick so the first snapshot happens after the interval.
+            interval.tick().await;
+
+            loop {
+                interval.tick().await;
+
+                let result = {
+                    let store_guard = store_for_snapshots.read();
+                    pitr_for_snapshots.create_snapshot(&store_guard)
+                };
+
+                match result {
+                    Ok(metadata) => info!(
+                        "Automatic snapshot created: {} (keys={}, wal_ops={})",
+                        metadata.snapshot_file, metadata.num_keys, metadata.num_operations
+                    ),
+                    Err(e) => error!("Automatic snapshot creation failed: {}", e),
+                }
+            }
+        });
+    } else {
+        info!("Automatic snapshots DISABLED (set KV_SNAPSHOT_INTERVAL_SECS > 0 to enable)");
+    }
 
     // Initialize replica if in replica mode
     let replication_replica_instance = if let Some((replica_id, master_url)) = replication_replica {

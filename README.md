@@ -41,7 +41,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 
 ### Comprehensive Testing
 - **49 Total Tests**: 17 library tests (incl. WAL + PITR + replication tests) + 7 API endpoint tests + 25 integration tests
-- **54 Total Tests**: 17 library tests (incl. WAL + PITR + replication tests) + 8 API endpoint tests + 29 integration tests
+- **58 Total Tests**: 19 library tests (incl. WAL + PITR + replication tests) + 8 API endpoint tests + 31 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -195,8 +195,8 @@ rust-kv-store/
 - [x] **Write-Ahead Logging**: Transaction log for crash recovery - **FULLY INTEGRATED**
 - [x] **Point-in-Time Recovery**: Restore to specific timestamps - **IMPLEMENTED**
 - [x] **Replication**: Master-replica data synchronization - **BASELINE IMPLEMENTED**
-- [ ] **Snapshot Management**: Configurable snapshot intervals
-- [ ] **Compression**: Gzip/zstd compression for storage
+- [x] **Snapshot Management**: Configurable automatic snapshot intervals - **IMPLEMENTED**
+- [x] **Compression**: Gzip/zstd compression for storage - **IMPLEMENTED**
 
 ### Phase 4: Advanced Features (Planned)
 - [ ] **Pub/Sub Messaging**: Event subscription and publishing
@@ -214,6 +214,7 @@ rust-kv-store/
 
 ### Persistence
 - JSON serialization with `serde_json`
+- Optional compressed persistence via file extension: `.gz` (gzip) and `.zst` (zstd)
 - Atomic writes (temp file + rename)
 - Versioned backups with automatic pruning
 - Configurable backup retention
@@ -229,11 +230,13 @@ rust-kv-store/
 
 #### Point-in-Time Recovery (PITR)
 - **Snapshots**: Create on-demand snapshots via `POST /api/pitr/snapshot`
+- **Automatic Snapshots**: Periodic background snapshots via `KV_SNAPSHOT_INTERVAL_SECS`
+- **Snapshot Compression**: `KV_SNAPSHOT_COMPRESSION=none|gzip|zstd` (defaults to `none`)
 - **Recovery Targets**: Recover to a Unix timestamp via `POST /api/pitr/recover/{timestamp}`
 - **Latest Recovery**: Restore latest snapshot via `POST /api/pitr/recover/latest`
 - **Observability**: Recovery stats via `GET /api/pitr/stats`
 - **Retention**: Snapshot cleanup via `POST /api/pitr/cleanup`
-- **Environment Configuration**: `KV_SNAPSHOTS_DIR` (default: `snapshots`)
+- **Environment Configuration**: `KV_SNAPSHOTS_DIR` (default: `snapshots`), `KV_SNAPSHOT_INTERVAL_SECS` (default: `0`, disabled)
 
 #### Replication
 - **Roles**: Master or replica via `KV_NODE_ROLE` (`master` default)
@@ -330,7 +333,7 @@ The following production hardening features have been implemented and fully test
 
 ### Test Coverage
 - **49 Total Tests**: 17 library tests + 7 API endpoint tests + 25 integration tests, all passing with 100% success rate
-- **54 Total Tests**: 17 library tests + 8 API endpoint tests + 29 integration tests, all passing with 100% success rate
+- **58 Total Tests**: 19 library tests + 8 API endpoint tests + 31 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
