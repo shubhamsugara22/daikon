@@ -40,7 +40,6 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **49 Total Tests**: 17 library tests (incl. WAL + PITR + replication tests) + 7 API endpoint tests + 25 integration tests
 - **58 Total Tests**: 19 library tests (incl. WAL + PITR + replication tests) + 8 API endpoint tests + 31 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
@@ -332,7 +331,6 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
-- **49 Total Tests**: 17 library tests + 7 API endpoint tests + 25 integration tests, all passing with 100% success rate
 - **58 Total Tests**: 19 library tests + 8 API endpoint tests + 31 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
