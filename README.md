@@ -218,6 +218,26 @@ rust-kv-store/
 - Versioned backups with automatic pruning
 - Configurable backup retention
 
+**Compression examples:**
+
+```bash
+# CLI / local store files
+# Save or load using gzip by choosing a .gz filename
+cargo run -- --file store.json.gz save --versions 3
+cargo run -- --file store.json.gz load
+
+# Save or load using zstd by choosing a .zst filename
+cargo run -- --file store.json.zst save --versions 3
+cargo run -- --file store.json.zst load
+
+# Server with automatic compressed snapshots
+KV_STORE_PATH=server_store.json.zst \
+KV_SNAPSHOTS_DIR=snapshots \
+KV_SNAPSHOT_INTERVAL_SECS=300 \
+KV_SNAPSHOT_COMPRESSION=gzip \
+cargo run --bin server
+```
+
 #### Write-Ahead Logging (WAL)
 - **Production Ready**: ✅ Fully integrated across all API write endpoints
 - **Durability**: Every write operation is logged to disk before being applied to memory
