@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::kv_store::KvStore;
 use crate::pitr::Pitr;
+use crate::pubsub::{PubSub, PubSubMessage};
 use crate::replication::{ReplicationMaster, ReplicationReplica};
 use crate::wal::{Wal, WalEntry, WalOperation};
 
@@ -12,6 +13,7 @@ pub type WebWal = web::Data<Wal>;
 pub type WebPitr = web::Data<Pitr>;
 pub type WebReplicationMaster = web::Data<ReplicationMaster>;
 pub type WebReplicationReplica = web::Data<ReplicationReplica>;
+pub type WebPubSub = web::Data<PubSub>;
 
 #[derive(Deserialize)]
 pub struct SetRequest {
