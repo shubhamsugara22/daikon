@@ -40,7 +40,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **58 Total Tests**: 19 library tests (incl. WAL + PITR + replication tests) + 8 API endpoint tests + 31 integration tests
+- **74 Total Tests**: 26 library tests (incl. WAL + PITR + replication + pubsub tests) + 8 API endpoint tests + 40 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -52,6 +52,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
   - API endpoints (REST/HTTP integration testing)
   - Stats tracking and accuracy
   - Persistence (save/load/versioning)
+  - Pub/Sub messaging (subscribe/publish/poll)
 
 ## Features Status
 
@@ -197,9 +198,9 @@ rust-kv-store/
 - [x] **Snapshot Management**: Configurable automatic snapshot intervals - **IMPLEMENTED**
 - [x] **Compression**: Gzip/zstd compression for storage - **IMPLEMENTED**
 
-### Phase 4: Advanced Features (Planned)
-- [ ] **Pub/Sub Messaging**: Event subscription and publishing
-- [ ] **Transactions**: MULTI/EXEC operations with rollback
+### Phase 4: Advanced Features (In Progress)
+- [x] **Pub/Sub Messaging**: Event subscription and publishing - **IMPLEMENTED**
+- [ ] **Transactions**: MULTI/EXEC operations with rollback (partial - basic support exists)
 - [ ] **Lua Scripting**: Custom script execution
 - [ ] **Stream Data Type**: Time-series data support
 - [ ] **HyperLogLog**: Cardinality estimation
@@ -280,6 +281,56 @@ cargo run --bin server
 }
 ```
 
+#### Pub/Sub Messaging
+- **Channels**: Dynamic channels created on first subscription
+- **Subscriptions**: Multiple subscribers per channel with unique subscriber IDs
+- **Publishers**: Any client can publish to any channel
+- **Message Queue**: Per-subscriber FIFO message queue (default 1000 messages)
+- **Polling Model**: Subscribers poll for messages at their own pace
+- **Channel Management**: Automatic cleanup of empty channels
+- **API Endpoints**:
+  - `POST /api/pubsub/subscribe/{channel}` → Returns subscriber ID
+  - `POST /api/pubsub/unsubscribe/{channel}/{subscriber_id}` → Remove subscription
+  - `POST /api/pubsub/publish/{channel}` → Broadcast message to all subscribers
+  - `GET /api/pubsub/messages/{subscriber_id}` → Poll messages (default 10, configurable via `?limit=N`)
+  - `GET /api/pubsub/channels` → List all active channels
+  - `GET /api/pubsub/channels/{channel}/subscribers` → List subscribers for a channel
+
+**Publishing and subscribing example:**
+
+```bash
+# Terminal 1: Subscribe to a channel
+SUBSCRIBER=$(curl -s -X POST http://localhost:8080/api/pubsub/subscribe/alerts | jq -r '.subscriber_id')
+echo "Subscriber ID: $SUBSCRIBER"
+
+# Poll for messages (initially empty)
+curl http://localhost:8080/api/pubsub/messages/$SUBSCRIBER?limit=5
+
+# Terminal 2: Publish messages
+curl -X POST http://localhost:8080/api/pubsub/publish/alerts \
+  -H "Content-Type: application/json" \
+  -d '{"message": "System alert!"}'
+
+# Terminal 1: Poll again to receive messages
+curl http://localhost:8080/api/pubsub/messages/$SUBSCRIBER?limit=5
+# Response:
+# {
+#   "messages": [
+#     {
+#       "channel": "alerts",
+#       "message": "System alert!",
+#       "timestamp": 1741920000
+#     }
+#   ]
+# }
+
+# List all active channels
+curl http://localhost:8080/api/pubsub/channels
+
+# List subscribers on a channel
+curl http://localhost:8080/api/pubsub/channels/alerts/subscribers
+```
+
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
 - `Mutex` still used in server startup path (partial migration)
@@ -351,7 +402,7 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
-- **58 Total Tests**: 19 library tests + 8 API endpoint tests + 31 integration tests, all passing with 100% success rate
+- **74 Total Tests**: 26 library tests + 8 API endpoint tests + 40 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
@@ -363,6 +414,7 @@ The following production hardening features have been implemented and fully test
   - Configuration validation
   - Statistics tracking
   - Persistence (save/load with versioning)
+  - Pub/Sub messaging (subscribe/publish/poll/list operations)
 
 **Status**: Phase 1 complete and production-ready! ✅
 

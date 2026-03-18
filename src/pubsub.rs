@@ -216,9 +216,6 @@ impl PubSub {
             });
         }
 
-        drop(subscribers); // Release read lock before acquiring write lock if needed
-
-        let mut subscribers = self.subscribers.write();
         // Remove empty channels
         channels.retain(|_, subs| !subs.is_empty());
 
