@@ -1,6 +1,7 @@
 use rust_kv_store::config::StoreConfig;
 use rust_kv_store::error::KvStoreError;
 use rust_kv_store::kv_store::{KvStore, Value};
+use rust_kv_store::pubsub::PubSub;
 use std::env;
 use std::fs;
 
@@ -466,3 +467,277 @@ fn test_transaction_set_with_ttl_applies_on_exec() {
         Some(&Value::Str("ttl_value".to_string()))
     );
 }
+
+// ============ Pub/Sub Tests ============
+
+#[test]
+fn test_pubsub_subscribe_and_publish() {
+    let pubsub = PubSub::new();
+    let subscription_id = PubSub::new_subscriber_id();
+
+    // Subscribe to a channel
+    pubsub
+        .subscribe("news".to_string(), subscription_id.clone())
+        .expect("subscribe failed");
+
+    // Publish a message
+    let count = pubsub
+        .publish("news".to_string(), "breaking news!".to_string())
+        .expect("publish failed");
+    assert_eq!(count, 1, "should have 1 subscriber");
+
+    // Poll messages
+    let messages = pubsub
+        .poll_messages(subscription_id, 10)
+        .expect("poll failed");
+    assert_eq!(messages.len(), 1, "should have 1 message");
+    assert_eq!(messages[0].message, "breaking news!");
+    assert_eq!(messages[0].channel, "news");
+}
+
+#[test]
+fn test_pubsub_multiple_subscribers() {
+    let pubsub = PubSub::new();
+    let sub1 = PubSub::new_subscriber_id();
+    let sub2 = PubSub::new_subscriber_id();
+    let sub3 = PubSub::new_subscriber_id();
+
+    // Subscribe all three to the same channel
+    pubsub
+        .subscribe("alerts".to_string(), sub1.clone())
+        .expect("subscribe1 failed");
+    pubsub
+        .subscribe("alerts".to_string(), sub2.clone())
+        .expect("subscribe2 failed");
+    pubsub
+        .subscribe("alerts".to_string(), sub3.clone())
+        .expect("subscribe3 failed");
+
+    // Publish to the channel
+    let count = pubsub
+        .publish("alerts".to_string(), "alert message".to_string())
+        .expect("publish failed");
+    assert_eq!(count, 3, "should have 3 subscribers");
+
+    // Each subscriber should get the message
+    let msg1 = pubsub
+        .poll_messages(sub1, 10)
+        .expect("poll1 failed");
+    let msg2 = pubsub
+        .poll_messages(sub2, 10)
+        .expect("poll2 failed");
+    let msg3 = pubsub
+        .poll_messages(sub3, 10)
+        .expect("poll3 failed");
+
+    assert_eq!(msg1.len(), 1);
+    assert_eq!(msg2.len(), 1);
+    assert_eq!(msg3.len(), 1);
+}
+
+#[test]
+fn test_pubsub_unsubscribe() {
+    let pubsub = PubSub::new();
+    let sub1 = PubSub::new_subscriber_id();
+    let sub2 = PubSub::new_subscriber_id();
+
+    // Subscribe both
+    pubsub
+        .subscribe("channel".to_string(), sub1.clone())
+        .expect("subscribe1 failed");
+    pubsub
+        .subscribe("channel".to_string(), sub2.clone())
+        .expect("subscribe2 failed");
+
+    // Unsubscribe one
+    pubsub
+        .unsubscribe("channel".to_string(), sub1.clone())
+        .expect("unsubscribe failed");
+
+    // Publish
+    let count = pubsub
+        .publish("channel".to_string(), "message".to_string())
+        .expect("publish failed");
+    assert_eq!(count, 1, "should have 1 subscriber after unsubscribe");
+
+    // Only sub2 should have the message
+    let messages = pubsub
+        .poll_messages(sub2, 10)
+        .expect("poll failed");
+    assert_eq!(messages.len(), 1);
+}
+
+#[test]
+fn test_pubsub_multiple_channels() {
+    let pubsub = PubSub::new();
+    let sub = PubSub::new_subscriber_id();
+
+    // Subscribe to multiple channels
+    pubsub
+        .subscribe("sports".to_string(), sub.clone())
+        .expect("subscribe to sports failed");
+    pubsub
+        .subscribe("weather".to_string(), sub.clone())
+        .expect("subscribe to weather failed");
+    pubsub
+        .subscribe("tech".to_string(), sub.clone())
+        .expect("subscribe to tech failed");
+
+    // Publish to each channel
+    pubsub
+        .publish("sports".to_string(), "goal!".to_string())
+        .expect("publish to sports failed");
+    pubsub
+        .publish("weather".to_string(), "sunny".to_string())
+        .expect("publish to weather failed");
+    pubsub
+        .publish("tech".to_string(), "AI update".to_string())
+        .expect("publish to tech failed");
+
+    // Poll all messages (should be 3)
+    let messages = pubsub
+        .poll_messages(sub, 10)
+        .expect("poll failed");
+    assert_eq!(messages.len(), 3);
+
+    // Verify we got messages from all channels
+    let channels: std::collections::HashSet<_> =
+        messages.iter().map(|m| &m.channel).collect();
+    assert_eq!(channels.len(), 3);
+}
+
+#[test]
+fn test_pubsub_list_channels() {
+    let pubsub = PubSub::new();
+    let sub = PubSub::new_subscriber_id();
+
+    // Subscribe to multiple channels
+    pubsub
+        .subscribe("ch1".to_string(), sub.clone())
+        .expect("subscribe to ch1 failed");
+    pubsub
+        .subscribe("ch2".to_string(), sub.clone())
+        .expect("subscribe to ch2 failed");
+    pubsub
+        .subscribe("ch3".to_string(), sub.clone())
+        .expect("subscribe to ch3 failed");
+
+    // List channels
+    let channels = pubsub
+        .list_channels()
+        .expect("list channels failed");
+    assert_eq!(channels.len(), 3);
+    assert!(channels.contains(&"ch1".to_string()));
+    assert!(channels.contains(&"ch2".to_string()));
+    assert!(channels.contains(&"ch3".to_string()));
+}
+
+#[test]
+fn test_pubsub_list_subscribers() {
+    let pubsub = PubSub::new();
+    let sub1 = PubSub::new_subscriber_id();
+    let sub2 = PubSub::new_subscriber_id();
+    let sub3 = PubSub::new_subscriber_id();
+
+    // Subscribe multiple to same channel
+    pubsub
+        .subscribe("channel".to_string(), sub1.clone())
+        .expect("subscribe1 failed");
+    pubsub
+        .subscribe("channel".to_string(), sub2.clone())
+        .expect("subscribe2 failed");
+    pubsub
+        .subscribe("channel".to_string(), sub3.clone())
+        .expect("subscribe3 failed");
+
+    // List subscribers
+    let subscribers = pubsub
+        .list_subscribers("channel".to_string())
+        .expect("list subscribers failed");
+    assert_eq!(subscribers.len(), 3);
+}
+
+#[test]
+fn test_pubsub_pending_message_count() {
+    let pubsub = PubSub::new();
+    let sub = PubSub::new_subscriber_id();
+
+    pubsub
+        .subscribe("channel".to_string(), sub.clone())
+        .expect("subscribe failed");
+
+    // Publish multiple messages
+    pubsub
+        .publish("channel".to_string(), "msg1".to_string())
+        .expect("publish1 failed");
+    pubsub
+        .publish("channel".to_string(), "msg2".to_string())
+        .expect("publish2 failed");
+    pubsub
+        .publish("channel".to_string(), "msg3".to_string())
+        .expect("publish3 failed");
+
+    // Check pending count
+    let count = pubsub
+        .pending_message_count(sub.clone())
+        .expect("pending count failed");
+    assert_eq!(count, 3);
+
+    // Poll one message and check count again
+    pubsub
+        .poll_messages(sub.clone(), 1)
+        .expect("poll failed");
+    let count = pubsub
+        .pending_message_count(sub)
+        .expect("pending count failed");
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn test_pubsub_empty_channel_cleanup() {
+    let pubsub = PubSub::new();
+    let sub = PubSub::new_subscriber_id();
+
+    pubsub
+        .subscribe("channel".to_string(), sub.clone())
+        .expect("subscribe failed");
+
+    // Unsubscribe
+    pubsub
+        .unsubscribe("channel".to_string(), sub)
+        .expect("unsubscribe failed");
+
+    // Channel should be cleaned up
+    let channels = pubsub
+        .list_channels()
+        .expect("list channels failed");
+    assert!(channels.is_empty(), "empty channels should be cleaned up");
+}
+
+#[test]
+fn test_pubsub_message_fifo_order() {
+    let pubsub = PubSub::new();
+    let sub = PubSub::new_subscriber_id();
+
+    pubsub
+        .subscribe("channel".to_string(), sub.clone())
+        .expect("subscribe failed");
+
+    // Publish messages in order
+    for i in 0..5 {
+        pubsub
+            .publish("channel".to_string(), format!("msg{}", i))
+            .expect(&format!("publish msg{} failed", i));
+    }
+
+    // Poll and verify FIFO order
+    let messages = pubsub
+        .poll_messages(sub, 10)
+        .expect("poll failed");
+    assert_eq!(messages.len(), 5);
+
+    for (i, msg) in messages.iter().enumerate() {
+        assert_eq!(msg.message, format!("msg{}", i));
+    }
+}
+

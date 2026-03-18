@@ -69,6 +69,38 @@ pub struct StatsResponse {
     hit_rate: f64,
 }
 
+#[derive(Deserialize)]
+pub struct PublishRequest {
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct PublishResponse {
+    pub channel: String,
+    pub subscribers_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct SubscribeResponse {
+    pub subscriber_id: String,
+}
+
+#[derive(Serialize)]
+pub struct MessagesResponse {
+    pub messages: Vec<PubSubMessage>,
+}
+
+#[derive(Serialize)]
+pub struct ChannelsResponse {
+    pub channels: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct SubscribersResponse {
+    pub channel: String,
+    pub subscribers: Vec<String>,
+}
+
 // GET /api/keys/{key}
 pub async fn get_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
     let store = store.read(); // Read lock - allows concurrent reads
@@ -554,4 +586,94 @@ pub async fn replication_sync(replica: WebReplicationReplica) -> impl Responder 
 pub async fn replication_status(replica: WebReplicationReplica) -> impl Responder {
     let status = replica.get_status();
     HttpResponse::Ok().json(status)
+}
+
+// ============ Pub/Sub Endpoints ============
+
+// POST /api/pubsub/subscribe/{channel}
+// Subscribe to a channel
+pub async fn pubsub_subscribe(
+    pubsub: WebPubSub,
+    channel: web::Path<String>,
+) -> impl Responder {
+    let subscriber_id = PubSub::new_subscriber_id();
+    
+    match pubsub.subscribe(channel.to_string(), subscriber_id.clone()) {
+        Ok(_) => HttpResponse::Ok().json(SubscribeResponse { subscriber_id }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// POST /api/pubsub/unsubscribe/{channel}/{subscriber_id}
+// Unsubscribe from a channel
+pub async fn pubsub_unsubscribe(
+    pubsub: WebPubSub,
+    path: web::Path<(String, String)>,
+) -> impl Responder {
+    let (channel, subscriber_id) = path.into_inner();
+    
+    match pubsub.unsubscribe(channel, subscriber_id) {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "unsubscribed"
+        })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// POST /api/pubsub/publish/{channel}
+// Publish a message to a channel
+pub async fn pubsub_publish(
+    pubsub: WebPubSub,
+    channel: web::Path<String>,
+    req: web::Json<PublishRequest>,
+) -> impl Responder {
+    match pubsub.publish(channel.to_string(), req.message.clone()) {
+        Ok(subscribers_count) => HttpResponse::Ok().json(PublishResponse {
+            channel: channel.to_string(),
+            subscribers_count,
+        }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// GET /api/pubsub/messages/{subscriber_id}
+// Poll messages for a subscriber
+pub async fn pubsub_poll_messages(
+    pubsub: WebPubSub,
+    subscriber_id: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let limit = query
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(10);
+    
+    match pubsub.poll_messages(subscriber_id.to_string(), limit) {
+        Ok(messages) => HttpResponse::Ok().json(MessagesResponse { messages }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// GET /api/pubsub/channels
+// List all active channels
+pub async fn pubsub_list_channels(pubsub: WebPubSub) -> impl Responder {
+    match pubsub.list_channels() {
+        Ok(channels) => HttpResponse::Ok().json(ChannelsResponse { channels }),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+// GET /api/pubsub/channels/{channel}/subscribers
+// List subscribers for a specific channel
+pub async fn pubsub_list_subscribers(
+    pubsub: WebPubSub,
+    channel: web::Path<String>,
+) -> impl Responder {
+    match pubsub.list_subscribers(channel.to_string()) {
+        Ok(subscribers) => HttpResponse::Ok().json(SubscribersResponse {
+            channel: channel.to_string(),
+            subscribers,
+        }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
 }

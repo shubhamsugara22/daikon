@@ -1,6 +1,7 @@
 use actix_web::{web, App, HttpServer};
 use parking_lot::RwLock;
 use rust_kv_store::pitr::Pitr;
+use rust_kv_store::pubsub::PubSub;
 use rust_kv_store::replication::{ReplicationMaster, ReplicationReplica, ReplicationRole};
 use rust_kv_store::wal::{Wal, WalOperation};
 use rust_kv_store::{api, kv_store::KvStore};
@@ -81,6 +82,10 @@ async fn main() -> std::io::Result<()> {
     });
     info!("PITR snapshots directory: {}", snapshots_dir.display());
     let pitr = Arc::new(pitr);
+
+    // Initialize Pub/Sub engine
+    let pubsub = Arc::new(PubSub::new());
+    info!("Pub/Sub messaging engine initialized");
 
     // Initialize replication based on role
     let replication_master = if replication_role == ReplicationRole::Master {
@@ -216,12 +221,14 @@ async fn main() -> std::io::Result<()> {
 
     let replication_master_for_server = replication_master.clone();
     let replication_replica_for_server = replication_replica_instance.clone();
+    let pubsub_for_server = Arc::clone(&pubsub);
 
     let server = HttpServer::new(move || {
         let mut app = App::new()
             .app_data(web::Data::from(Arc::clone(&store)))
             .app_data(web::Data::from(Arc::clone(&wal)))
-            .app_data(web::Data::from(Arc::clone(&pitr)));
+            .app_data(web::Data::from(Arc::clone(&pitr)))
+            .app_data(web::Data::from(Arc::clone(&pubsub_for_server)));
 
         // Add replication master data if in master mode
         if let Some(ref master) = replication_master_for_server {
@@ -290,6 +297,22 @@ async fn main() -> std::io::Result<()> {
                 .route(
                     "/replication/status",
                     web::get().to(api::replication_status),
+                )
+                // Pub/Sub operations
+                .route("/pubsub/subscribe/{channel}", web::post().to(api::pubsub_subscribe))
+                .route(
+                    "/pubsub/unsubscribe/{channel}/{subscriber_id}",
+                    web::post().to(api::pubsub_unsubscribe),
+                )
+                .route("/pubsub/publish/{channel}", web::post().to(api::pubsub_publish))
+                .route(
+                    "/pubsub/messages/{subscriber_id}",
+                    web::get().to(api::pubsub_poll_messages),
+                )
+                .route("/pubsub/channels", web::get().to(api::pubsub_list_channels))
+                .route(
+                    "/pubsub/channels/{channel}/subscribers",
+                    web::get().to(api::pubsub_list_subscribers),
                 ),
         )
     })

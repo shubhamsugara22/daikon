@@ -1,8 +1,7 @@
-use crate::KvStoreError;
+use crate::error::KvStoreError;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -31,14 +30,12 @@ impl PubSubMessage {
 /// A subscriber with a message queue
 #[derive(Debug)]
 struct Subscriber {
-    id: String,
     messages: VecDeque<PubSubMessage>,
 }
 
 impl Subscriber {
-    fn new(id: String) -> Self {
+    fn new() -> Self {
         Self {
-            id,
             messages: VecDeque::new(),
         }
     }
@@ -96,7 +93,7 @@ impl PubSub {
 
         // Create subscriber entry if it doesn't exist
         if !subscribers.contains_key(&subscriber_id) {
-            subscribers.insert(subscriber_id.clone(), Subscriber::new(subscriber_id));
+            subscribers.insert(subscriber_id.clone(), Subscriber::new());
         }
 
         Ok(subscriber_id)
@@ -207,7 +204,7 @@ impl PubSub {
     /// Cleanup old subscribers with no pending messages
     pub fn cleanup_stale_subscribers(&self) -> Result<usize, KvStoreError> {
         let mut channels = self.channels.write();
-        let mut subscribers = self.subscribers.write();
+        let subscribers = self.subscribers.read();
 
         // Remove subscribers with empty message queues from channel lists
         for subscribers_in_channel in channels.values_mut() {
@@ -219,6 +216,9 @@ impl PubSub {
             });
         }
 
+        drop(subscribers); // Release read lock before acquiring write lock if needed
+
+        let mut subscribers = self.subscribers.write();
         // Remove empty channels
         channels.retain(|_, subs| !subs.is_empty());
 
