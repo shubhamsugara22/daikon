@@ -350,6 +350,15 @@ impl Pitr {
             WalOperation::Mset { pairs } => {
                 store.mset(pairs)?;
             }
+            WalOperation::PfAdd { key, values } => {
+                let _ = store.pfadd(key, values);
+            }
+            WalOperation::PfMerge {
+                destination,
+                sources,
+            } => {
+                let _ = store.pfmerge(destination, &sources);
+            }
         }
         Ok(())
     }

@@ -461,6 +461,15 @@ impl ReplicationReplica {
             WalOperation::Mset { pairs } => {
                 store.mset(pairs.clone())?;
             }
+            WalOperation::PfAdd { key, values } => {
+                let _ = store.pfadd(key.clone(), values.clone());
+            }
+            WalOperation::PfMerge {
+                destination,
+                sources,
+            } => {
+                let _ = store.pfmerge(destination.clone(), sources);
+            }
         }
 
         // Also append to local WAL for persistence

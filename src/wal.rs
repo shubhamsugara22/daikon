@@ -37,6 +37,13 @@ pub enum WalOperation {
     GetSet { key: String, value: String },
     #[serde(rename = "MSET")]
     Mset { pairs: Vec<(String, String)> },
+    #[serde(rename = "PFADD")]
+    PfAdd { key: String, values: Vec<String> },
+    #[serde(rename = "PFMERGE")]
+    PfMerge {
+        destination: String,
+        sources: Vec<String>,
+    },
 }
 
 impl WalEntry {
