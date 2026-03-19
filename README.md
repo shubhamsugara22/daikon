@@ -40,7 +40,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 - **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
 
 ### Comprehensive Testing
-- **74 Total Tests**: 26 library tests (incl. WAL + PITR + replication + pubsub tests) + 8 API endpoint tests + 40 integration tests
+- **87 Total Tests**: 30 library tests (incl. WAL + PITR + replication + pubsub + hyperloglog tests) + 11 API endpoint tests + 46 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -53,6 +53,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
   - Stats tracking and accuracy
   - Persistence (save/load/versioning)
   - Pub/Sub messaging (subscribe/publish/poll)
+  - HyperLogLog cardinality estimation (pfadd/pfcount/pfmerge)
 
 ## Features Status
 
@@ -203,7 +204,7 @@ rust-kv-store/
 - [ ] **Transactions**: MULTI/EXEC operations with rollback (partial - basic support exists)
 - [ ] **Lua Scripting**: Custom script execution
 - [ ] **Stream Data Type**: Time-series data support
-- [ ] **HyperLogLog**: Cardinality estimation
+- [x] **HyperLogLog**: Cardinality estimation - **IMPLEMENTED**
 
 ## Technical Details
 
@@ -331,6 +332,46 @@ curl http://localhost:8080/api/pubsub/channels
 curl http://localhost:8080/api/pubsub/channels/alerts/subscribers
 ```
 
+#### HyperLogLog
+- **Purpose**: Approximate unique counting with fixed memory usage
+- **Use Cases**: Unique visitors, distinct sessions, approximate daily active users
+- **Storage**: Native `HyperLogLog` value type inside the key-value store
+- **CLI Commands**:
+  - `cargo run -- pf-add visitors user1 user2 user3`
+  - `cargo run -- pf-count visitors`
+  - `cargo run -- pf-merge all_visitors visitors_web visitors_mobile`
+- **API Endpoints**:
+  - `POST /api/hll/{key}/add` with `{ "values": ["user1", "user2"] }`
+  - `GET /api/hll/{key}/count`
+  - `POST /api/hll/{destination}/merge` with `{ "sources": ["src1", "src2"] }`
+
+**HyperLogLog examples:**
+
+```bash
+# CLI approximate unique counting
+cargo run -- pf-add visitors user1 user2 user3 user2
+cargo run -- pf-count visitors
+
+# Merge two sketches into a destination key
+cargo run -- pf-add visitors_web web_user_1 web_user_2
+cargo run -- pf-add visitors_mobile mobile_user_1 web_user_2
+cargo run -- pf-merge visitors_all visitors_web visitors_mobile
+cargo run -- pf-count visitors_all
+
+# REST API add values
+curl -X POST http://localhost:8080/api/hll/visitors/add \
+  -H "Content-Type: application/json" \
+  -d '{"values": ["user1", "user2", "user3"]}'
+
+# REST API get approximate count
+curl http://localhost:8080/api/hll/visitors/count
+
+# REST API merge sketches
+curl -X POST http://localhost:8080/api/hll/visitors_all/merge \
+  -H "Content-Type: application/json" \
+  -d '{"sources": ["visitors_web", "visitors_mobile"]}'
+```
+
 ### Concurrency
 - `parking_lot::RwLock` for API shared state (read-heavy optimization)
 - `Mutex` still used in server startup path (partial migration)
@@ -402,7 +443,7 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
-- **74 Total Tests**: 26 library tests + 8 API endpoint tests + 40 integration tests, all passing with 100% success rate
+- **87 Total Tests**: 30 library tests + 11 API endpoint tests + 46 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
   - Memory enforcement (eviction, LRU ordering)
@@ -415,6 +456,7 @@ The following production hardening features have been implemented and fully test
   - Statistics tracking
   - Persistence (save/load with versioning)
   - Pub/Sub messaging (subscribe/publish/poll/list operations)
+  - HyperLogLog operations (PFADD/PFCOUNT/PFMERGE)
 
 **Status**: Phase 1 complete and production-ready! ✅
 
