@@ -1,5 +1,6 @@
 use crate::config::StoreConfig;
 use crate::error::{KvStoreError, Result};
+use crate::hyperloglog::HyperLogLog;
 use flate2::Compression;
 use flate2::{read::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,7 @@ pub struct MemoryProfile {
     pub float_values: usize,
     pub bool_values: usize,
     pub json_values: usize,
+    pub hyperloglog_values: usize,
     pub ttl_entries: usize,
     pub heap_fragmentation_ratio: f64,
 }
@@ -68,6 +70,7 @@ impl Default for MemoryProfile {
             float_values: 0,
             bool_values: 0,
             json_values: 0,
+            hyperloglog_values: 0,
             ttl_entries: 0,
             heap_fragmentation_ratio: 0.0,
         }
@@ -86,6 +89,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Json(JsonValue),
+    HyperLogLog(HyperLogLog),
 }
 
 impl fmt::Display for Value {
@@ -96,6 +100,7 @@ impl fmt::Display for Value {
             Value::Float(x) => write!(f, "{}", x),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Json(j) => write!(f, "{}", j),
+            Value::HyperLogLog(hll) => write!(f, "HyperLogLog(count≈{})", hll.count()),
         }
     }
 }
@@ -325,6 +330,7 @@ impl KvStore {
                         Value::Float(_) => "Float",
                         Value::Bool(_) => "Bool",
                         Value::Json(_) => "Json",
+                        Value::HyperLogLog(_) => "HyperLogLog",
                     };
                     Err(KvStoreError::type_mismatch(key, "Int", type_name))
                 }
@@ -355,6 +361,7 @@ impl KvStore {
                         Value::Float(_) => "Float",
                         Value::Bool(_) => "Bool",
                         Value::Json(_) => "Json",
+                        Value::HyperLogLog(_) => "HyperLogLog",
                     };
                     Err(KvStoreError::type_mismatch(key, "Int", type_name))
                 }
@@ -385,6 +392,7 @@ impl KvStore {
                         Value::Float(_) => "Float",
                         Value::Bool(_) => "Bool",
                         Value::Json(_) => "Json",
+                        Value::HyperLogLog(_) => "HyperLogLog",
                     };
                     Err(KvStoreError::type_mismatch(key, "Int", type_name))
                 }
@@ -415,6 +423,7 @@ impl KvStore {
                         Value::Float(_) => "Float",
                         Value::Bool(_) => "Bool",
                         Value::Json(_) => "Json",
+                        Value::HyperLogLog(_) => "HyperLogLog",
                     };
                     Err(KvStoreError::type_mismatch(key, "Str", type_name))
                 }
@@ -471,6 +480,160 @@ impl KvStore {
     /// Check if multiple keys exist. Returns count of existing keys.
     pub fn exists_many(&self, keys: &[String]) -> usize {
         keys.iter().filter(|k| self.exists(k)).count()
+    }
+
+    /// Add one or more values to a HyperLogLog under `key`.
+    ///
+    /// Returns the approximate cardinality after the add.
+    pub fn pfadd(&mut self, key: String, values: Vec<String>) -> Result<u64> {
+        self.validate_key(&key)?;
+        if values.is_empty() {
+            return Err(KvStoreError::InvalidValue(
+                "PFADD requires at least one value".to_string(),
+            ));
+        }
+
+        let mut created = false;
+        let approximate_count = match self.store.entry(key.clone()) {
+            std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                match &mut occupied.get_mut().value {
+                    Value::HyperLogLog(hll) => {
+                        for value in &values {
+                            hll.add(value);
+                        }
+                        hll.count()
+                    }
+                    other => {
+                        let got = match other {
+                            Value::Str(_) => "Str",
+                            Value::Int(_) => "Int",
+                            Value::Float(_) => "Float",
+                            Value::Bool(_) => "Bool",
+                            Value::Json(_) => "Json",
+                            Value::HyperLogLog(_) => "HyperLogLog",
+                        };
+                        return Err(KvStoreError::type_mismatch(&key, "HyperLogLog", got));
+                    }
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                let mut hll = HyperLogLog::default();
+                for value in &values {
+                    hll.add(value);
+                }
+                let count = hll.count();
+                vacant.insert(ValueWithTTL {
+                    value: Value::HyperLogLog(hll),
+                    expires_at: None,
+                });
+                created = true;
+                count
+            }
+        };
+
+        if created {
+            self.stats.memory_bytes +=
+                self.estimate_value_size(&Value::HyperLogLog(HyperLogLog::default()));
+            self.stats.total_keys = self.store.len();
+        }
+        self.stats.total_writes += 1;
+        self.update_lru(&key);
+        Ok(approximate_count)
+    }
+
+    /// Get the approximate cardinality for a HyperLogLog key.
+    pub fn pfcount(&self, key: &str) -> Result<u64> {
+        match self.get(key) {
+            Some(Value::HyperLogLog(hll)) => Ok(hll.count()),
+            Some(other) => {
+                let got = match other {
+                    Value::Str(_) => "Str",
+                    Value::Int(_) => "Int",
+                    Value::Float(_) => "Float",
+                    Value::Bool(_) => "Bool",
+                    Value::Json(_) => "Json",
+                    Value::HyperLogLog(_) => "HyperLogLog",
+                };
+                Err(KvStoreError::type_mismatch(key, "HyperLogLog", got))
+            }
+            None => Err(KvStoreError::KeyNotFound(key.to_string())),
+        }
+    }
+
+    /// Merge one or more HyperLogLog source keys into a destination key.
+    ///
+    /// Missing source keys are treated as empty sketches.
+    pub fn pfmerge(&mut self, destination: String, source_keys: &[String]) -> Result<u64> {
+        self.validate_key(&destination)?;
+        if source_keys.is_empty() {
+            return Err(KvStoreError::InvalidValue(
+                "PFMERGE requires at least one source key".to_string(),
+            ));
+        }
+
+        let mut merged = match self.store.get(&destination) {
+            Some(ValueWithTTL {
+                value: Value::HyperLogLog(hll),
+                ..
+            }) => hll.clone(),
+            Some(ValueWithTTL { value, .. }) => {
+                let got = match value {
+                    Value::Str(_) => "Str",
+                    Value::Int(_) => "Int",
+                    Value::Float(_) => "Float",
+                    Value::Bool(_) => "Bool",
+                    Value::Json(_) => "Json",
+                    Value::HyperLogLog(_) => "HyperLogLog",
+                };
+                return Err(KvStoreError::type_mismatch(
+                    &destination,
+                    "HyperLogLog",
+                    got,
+                ));
+            }
+            None => HyperLogLog::default(),
+        };
+
+        for source_key in source_keys {
+            if source_key == &destination {
+                continue;
+            }
+            if let Some(entry) = self.store.get(source_key) {
+                match &entry.value {
+                    Value::HyperLogLog(hll) => merged.merge(hll)?,
+                    other => {
+                        let got = match other {
+                            Value::Str(_) => "Str",
+                            Value::Int(_) => "Int",
+                            Value::Float(_) => "Float",
+                            Value::Bool(_) => "Bool",
+                            Value::Json(_) => "Json",
+                            Value::HyperLogLog(_) => "HyperLogLog",
+                        };
+                        return Err(KvStoreError::type_mismatch(source_key, "HyperLogLog", got));
+                    }
+                }
+            }
+        }
+
+        let created = !self.store.contains_key(&destination);
+        self.store.insert(
+            destination.clone(),
+            ValueWithTTL {
+                value: Value::HyperLogLog(merged.clone()),
+                expires_at: None,
+            },
+        );
+
+        if created {
+            self.stats.memory_bytes +=
+                self.estimate_value_size(&Value::HyperLogLog(merged.clone()));
+            self.stats.total_keys = self.store.len();
+        }
+        self.stats.total_writes += 1;
+        self.update_lru(&destination);
+
+        Ok(merged.count())
     }
 
     // Pattern Matching
@@ -568,6 +731,10 @@ impl KvStore {
                 Value::Json(j) => {
                     profile.value_bytes += j.to_string().len();
                     profile.json_values += 1;
+                }
+                Value::HyperLogLog(hll) => {
+                    profile.value_bytes += hll.memory_bytes();
+                    profile.hyperloglog_values += 1;
                 }
             }
 
@@ -786,6 +953,7 @@ impl KvStore {
             Value::Float(_) => 8,
             Value::Bool(_) => 1,
             Value::Json(j) => j.to_string().len(),
+            Value::HyperLogLog(hll) => hll.memory_bytes(),
         }
     }
 

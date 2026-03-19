@@ -299,12 +299,18 @@ async fn main() -> std::io::Result<()> {
                     web::get().to(api::replication_status),
                 )
                 // Pub/Sub operations
-                .route("/pubsub/subscribe/{channel}", web::post().to(api::pubsub_subscribe))
+                .route(
+                    "/pubsub/subscribe/{channel}",
+                    web::post().to(api::pubsub_subscribe),
+                )
                 .route(
                     "/pubsub/unsubscribe/{channel}/{subscriber_id}",
                     web::post().to(api::pubsub_unsubscribe),
                 )
-                .route("/pubsub/publish/{channel}", web::post().to(api::pubsub_publish))
+                .route(
+                    "/pubsub/publish/{channel}",
+                    web::post().to(api::pubsub_publish),
+                )
                 .route(
                     "/pubsub/messages/{subscriber_id}",
                     web::get().to(api::pubsub_poll_messages),
@@ -313,7 +319,11 @@ async fn main() -> std::io::Result<()> {
                 .route(
                     "/pubsub/channels/{channel}/subscribers",
                     web::get().to(api::pubsub_list_subscribers),
-                ),
+                )
+                // HyperLogLog operations
+                .route("/hll/{key}/add", web::post().to(api::hll_pfadd))
+                .route("/hll/{key}/count", web::get().to(api::hll_pfcount))
+                .route("/hll/{destination}/merge", web::post().to(api::hll_pfmerge)),
         )
     })
     .bind(&bind)?
@@ -413,6 +423,15 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
                         .collect();
                     let _ = store.mset(pair_strings); // Ignore errors during replay
                 }
+            }
+            WalOperation::PfAdd { key, values } => {
+                let _ = store.pfadd(key.clone(), values.clone());
+            }
+            WalOperation::PfMerge {
+                destination,
+                sources,
+            } => {
+                let _ = store.pfmerge(destination.clone(), sources);
             }
         }
     }

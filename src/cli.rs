@@ -62,6 +62,15 @@ pub enum Commands {
     Exec,
     /// Discard an ongoing transaction (DISCARD command)
     Discard,
+    /// Add values to a HyperLogLog key
+    PfAdd { key: String, values: Vec<String> },
+    /// Get approximate cardinality for a HyperLogLog key
+    PfCount { key: String },
+    /// Merge HyperLogLog source keys into a destination key
+    PfMerge {
+        destination: String,
+        sources: Vec<String>,
+    },
     /// Run performance benchmark suite
     Benchmark,
 }

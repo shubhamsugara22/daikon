@@ -169,6 +169,21 @@ fn main() {
             Ok(_) => println!("Transaction discarded"),
             Err(e) => eprintln!("Error: {}", e),
         },
+        Commands::PfAdd { key, values } => match store.pfadd(key.clone(), values) {
+            Ok(count) => println!("{} ≈ {} unique values", key, count),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::PfCount { key } => match store.pfcount(&key) {
+            Ok(count) => println!("{} ≈ {} unique values", key, count),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::PfMerge {
+            destination,
+            sources,
+        } => match store.pfmerge(destination.clone(), &sources) {
+            Ok(count) => println!("{} ≈ {} unique values after merge", destination, count),
+            Err(e) => eprintln!("Error: {}", e),
+        },
         Commands::Benchmark => {
             println!("Running performance benchmarks...");
             match Command::new("cargo")

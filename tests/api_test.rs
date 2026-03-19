@@ -176,3 +176,98 @@ fn test_api_replication_status_shape() {
     assert!(body["last_successful_sync_unix_secs"].is_null());
     assert!(body["last_sync_duration_ms"].is_null());
 }
+
+// ── HyperLogLog API tests ────────────────────────────────────────────────────
+
+#[actix_web::test]
+async fn test_api_hll_pfadd_and_pfcount() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(Arc::clone(&store)))
+            .service(
+                web::scope("/api")
+                    .route("/hll/{key}/add", web::post().to(api::hll_pfadd))
+                    .route("/hll/{key}/count", web::get().to(api::hll_pfcount)),
+            ),
+    )
+    .await;
+
+    // Add values
+    let req = awtest::TestRequest::post()
+        .uri("/api/hll/mykey/add")
+        .set_json(serde_json::json!({ "values": ["a", "b", "c"] }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    assert_eq!(body["key"], "mykey");
+    assert!(body["count"].as_u64().unwrap() > 0);
+
+    // Count
+    let req = awtest::TestRequest::get()
+        .uri("/api/hll/mykey/count")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    assert_eq!(body["key"], "mykey");
+    assert!(body["count"].as_u64().unwrap() > 0);
+}
+
+#[actix_web::test]
+async fn test_api_hll_pfcount_unknown_key_returns_400() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .service(
+                web::scope("/api")
+                    .route("/hll/{key}/count", web::get().to(api::hll_pfcount)),
+            ),
+    )
+    .await;
+
+    let req = awtest::TestRequest::get()
+        .uri("/api/hll/nosuchkey/count")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[actix_web::test]
+async fn test_api_hll_pfmerge() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(Arc::clone(&store)))
+            .service(
+                web::scope("/api")
+                    .route("/hll/{key}/add", web::post().to(api::hll_pfadd))
+                    .route("/hll/{destination}/merge", web::post().to(api::hll_pfmerge))
+                    .route("/hll/{key}/count", web::get().to(api::hll_pfcount)),
+            ),
+    )
+    .await;
+
+    // Seed two sources
+    for (key, vals) in [("s1", vec!["a", "b"]), ("s2", vec!["c", "d"])] {
+        let req = awtest::TestRequest::post()
+            .uri(&format!("/api/hll/{}/add", key))
+            .set_json(serde_json::json!({ "values": vals }))
+            .to_request();
+        let resp = awtest::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200);
+    }
+
+    // Merge
+    let req = awtest::TestRequest::post()
+        .uri("/api/hll/dst/merge")
+        .set_json(serde_json::json!({ "sources": ["s1", "s2"] }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    assert_eq!(body["key"], "dst");
+    assert!(body["count"].as_u64().unwrap() > 0);
+}

@@ -741,3 +741,84 @@ fn test_pubsub_message_fifo_order() {
     }
 }
 
+// ── HyperLogLog tests ────────────────────────────────────────────────────────
+
+#[test]
+fn test_hll_pfadd_returns_positive_count() {
+    let mut store = KvStore::new();
+    let count = store
+        .pfadd("hll1".to_string(), vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        .expect("pfadd failed");
+    assert!(count > 0, "estimated cardinality should be at least 1");
+}
+
+#[test]
+fn test_hll_pfcount_matches_pfadd_result() {
+    let mut store = KvStore::new();
+    let add_count = store
+        .pfadd("hll1".to_string(), vec!["x".to_string(), "y".to_string()])
+        .expect("pfadd failed");
+    let read_count = store.pfcount("hll1").expect("pfcount failed");
+    assert_eq!(add_count, read_count);
+}
+
+#[test]
+fn test_hll_pfadd_grows_on_new_values() {
+    let mut store = KvStore::new();
+    store
+        .pfadd("hll1".to_string(), vec!["a".to_string()])
+        .expect("pfadd failed");
+    let count_after_one = store.pfcount("hll1").expect("pfcount failed");
+
+    // Add many distinct values
+    let more: Vec<String> = (0..100).map(|i| format!("val{}", i)).collect();
+    store.pfadd("hll1".to_string(), more).expect("pfadd failed");
+    let count_after_many = store.pfcount("hll1").expect("pfcount failed");
+
+    assert!(
+        count_after_many > count_after_one,
+        "adding 100 distinct values must increase the estimate"
+    );
+}
+
+#[test]
+fn test_hll_pfcount_missing_key_errors() {
+    let store = KvStore::new();
+    let result = store.pfcount("no_such_key");
+    assert!(result.is_err(), "pfcount on missing key should error");
+}
+
+#[test]
+fn test_hll_pfmerge_combines_estimates() {
+    let mut store = KvStore::new();
+    store
+        .pfadd("src1".to_string(), vec!["a".to_string(), "b".to_string()])
+        .expect("pfadd src1 failed");
+    store
+        .pfadd("src2".to_string(), vec!["c".to_string(), "d".to_string()])
+        .expect("pfadd src2 failed");
+
+    let merged_count = store
+        .pfmerge("dst".to_string(), &["src1".to_string(), "src2".to_string()])
+        .expect("pfmerge failed");
+
+    // The merged HLL should capture more unique values than either source alone
+    let src1_count = store.pfcount("src1").expect("pfcount src1");
+    let src2_count = store.pfcount("src2").expect("pfcount src2");
+    assert!(
+        merged_count >= src1_count.min(src2_count),
+        "merged estimate should be at least as large as the smaller source"
+    );
+}
+
+#[test]
+fn test_hll_type_mismatch_on_string_key() {
+    let mut store = KvStore::new();
+    store.set("strkey".to_string(), "hello".to_string()).expect("set failed");
+    let result = store.pfcount("strkey");
+    assert!(
+        matches!(result, Err(KvStoreError::TypeMismatch { .. })),
+        "pfcount on a String key should return TypeMismatch"
+    );
+}
+

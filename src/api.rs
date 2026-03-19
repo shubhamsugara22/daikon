@@ -592,12 +592,9 @@ pub async fn replication_status(replica: WebReplicationReplica) -> impl Responde
 
 // POST /api/pubsub/subscribe/{channel}
 // Subscribe to a channel
-pub async fn pubsub_subscribe(
-    pubsub: WebPubSub,
-    channel: web::Path<String>,
-) -> impl Responder {
+pub async fn pubsub_subscribe(pubsub: WebPubSub, channel: web::Path<String>) -> impl Responder {
     let subscriber_id = PubSub::new_subscriber_id();
-    
+
     match pubsub.subscribe(channel.to_string(), subscriber_id.clone()) {
         Ok(_) => HttpResponse::Ok().json(SubscribeResponse { subscriber_id }),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -611,7 +608,7 @@ pub async fn pubsub_unsubscribe(
     path: web::Path<(String, String)>,
 ) -> impl Responder {
     let (channel, subscriber_id) = path.into_inner();
-    
+
     match pubsub.unsubscribe(channel, subscriber_id) {
         Ok(_) => HttpResponse::Ok().json(serde_json::json!({
             "status": "unsubscribed"
@@ -647,7 +644,7 @@ pub async fn pubsub_poll_messages(
         .get("limit")
         .and_then(|l| l.parse::<usize>().ok())
         .unwrap_or(10);
-    
+
     match pubsub.poll_messages(subscriber_id.to_string(), limit) {
         Ok(messages) => HttpResponse::Ok().json(MessagesResponse { messages }),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -673,6 +670,71 @@ pub async fn pubsub_list_subscribers(
         Ok(subscribers) => HttpResponse::Ok().json(SubscribersResponse {
             channel: channel.to_string(),
             subscribers,
+        }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// ── HyperLogLog ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct PfAddRequest {
+    pub values: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PfMergeRequest {
+    pub sources: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct HllCountResponse {
+    pub key: String,
+    pub count: u64,
+}
+
+// POST /api/hll/{key}/add
+// Add values to a HyperLogLog key; returns the new estimated cardinality.
+pub async fn hll_pfadd(
+    store: WebKvStore,
+    key: web::Path<String>,
+    req: web::Json<PfAddRequest>,
+) -> impl Responder {
+    let mut store = store.write();
+    match store.pfadd(key.to_string(), req.values.clone()) {
+        Ok(count) => HttpResponse::Ok().json(HllCountResponse {
+            key: key.to_string(),
+            count,
+        }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// GET /api/hll/{key}/count
+// Return the estimated cardinality of a HyperLogLog key.
+pub async fn hll_pfcount(store: WebKvStore, key: web::Path<String>) -> impl Responder {
+    let store = store.read();
+    match store.pfcount(&key) {
+        Ok(count) => HttpResponse::Ok().json(HllCountResponse {
+            key: key.to_string(),
+            count,
+        }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// POST /api/hll/{destination}/merge
+// Merge one or more source HLL keys into the destination key.
+pub async fn hll_pfmerge(
+    store: WebKvStore,
+    destination: web::Path<String>,
+    req: web::Json<PfMergeRequest>,
+) -> impl Responder {
+    let mut store = store.write();
+    match store.pfmerge(destination.to_string(), &req.sources) {
+        Ok(count) => HttpResponse::Ok().json(HllCountResponse {
+            key: destination.to_string(),
+            count,
         }),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
