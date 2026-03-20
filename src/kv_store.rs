@@ -31,6 +31,7 @@ fn compression_for_path(path: &Path) -> FileCompression {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct StoreStats {
     pub total_keys: usize,
     pub expired_keys: usize,
@@ -853,14 +854,21 @@ impl KvStore {
                 .and_then(|s| s.to_str())
                 .ok_or("invalid filename")?;
             let parent = path.parent().unwrap_or_else(|| Path::new("."));
+            // Handle empty parent path (for relative files like "store.json")
+            let parent = if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            };
             let backup_name = format!("{}.bak.{}", file_name, epoch);
             let backup_path = parent.join(backup_name);
 
-            fs::copy(path, &backup_path)?;
+            fs::copy(path, &backup_path).map_err(|e| format!("Failed to create backup: {}", e))?;
 
             // Prune old backups matching "<file>.bak.*" keeping newest `max_versions`
             let prefix = format!("{}{}", file_name, ".bak.");
-            let mut backups: Vec<_> = fs::read_dir(parent)?
+            let mut backups: Vec<_> = fs::read_dir(parent)
+                .map_err(|e| format!("Failed to read directory {:?}: {}", parent, e))?
                 .filter_map(|e| e.ok())
                 .filter(|e| {
                     e.file_type().map(|t| t.is_file()).unwrap_or(false)
@@ -893,7 +901,8 @@ impl KvStore {
             path.with_extension("tmp")
         };
         {
-            let file = File::create(&tmp_path)?;
+            let file = File::create(&tmp_path)
+                .map_err(|e| format!("Failed to create temp file {:?}: {}", tmp_path, e))?;
             match compression {
                 FileCompression::None => {
                     let writer = BufWriter::new(file);
@@ -912,7 +921,8 @@ impl KvStore {
                 }
             }
         }
-        fs::rename(&tmp_path, path)?;
+        fs::rename(&tmp_path, path)
+            .map_err(|e| format!("Failed to rename {:?} to {:?}: {}", tmp_path, path, e))?;
 
         Ok(())
     }

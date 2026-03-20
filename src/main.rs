@@ -34,6 +34,8 @@ fn main() {
         }
     }
 
+    let mut should_save = true; // Auto-save by default
+
     match cli.command {
         Commands::Set { key, value } => match store.set(key.clone(), value) {
             Ok(_) => println!("Set '{}' successfully", key),
@@ -45,15 +47,19 @@ fn main() {
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
-        Commands::Get { key } => match store.get(&key) {
-            Some(value) => println!("{}: {}", key, value),
-            None => println!("Key '{}' not found", key),
-        },
+        Commands::Get { key } => {
+            should_save = false;
+            match store.get(&key) {
+                Some(value) => println!("{}: {}", key, value),
+                None => println!("Key '{}' not found", key),
+            }
+        }
         Commands::Delete { key } => match store.delete(&key) {
             Some(_) => println!("Deleted '{}' successfully", key),
             None => println!("Key '{}' not found", key),
         },
         Commands::List => {
+            should_save = false;
             if store.is_empty() {
                 println!("Store is empty");
             } else {
@@ -62,20 +68,26 @@ fn main() {
                 }
             }
         }
-        Commands::Save { versions } => match store.save_with_version(&file_path, versions) {
-            Ok(_) => println!("Store saved successfully to {:?}", file_path),
-            Err(e) => eprintln!("Error saving store: {}", e),
-        },
-        Commands::Load => match KvStore::load_from_file(&file_path) {
-            Ok(loaded_store) => {
-                #[allow(unused_assignments)]
-                {
-                    store = loaded_store;
-                }
-                println!("Store loaded successfully from {:?}", file_path);
+        Commands::Save { versions } => {
+            should_save = false;
+            match store.save_with_version(&file_path, versions) {
+                Ok(_) => println!("Store saved successfully to {:?}", file_path),
+                Err(e) => eprintln!("Error saving store: {}", e),
             }
-            Err(e) => eprintln!("Error loading store: {}", e),
-        },
+        }
+        Commands::Load => {
+            should_save = false;
+            match KvStore::load_from_file(&file_path) {
+                Ok(loaded_store) => {
+                    #[allow(unused_assignments)]
+                    {
+                        store = loaded_store;
+                    }
+                    println!("Store loaded successfully from {:?}", file_path);
+                }
+                Err(e) => eprintln!("Error loading store: {}", e),
+            }
+        }
         Commands::Incr { key } => match store.incr(&key) {
             Ok(new_val) => println!("{} = {}", key, new_val),
             Err(e) => eprintln!("Error: {}", e),
@@ -121,10 +133,12 @@ fn main() {
             }
         }
         Commands::Exists { keys } => {
+            should_save = false;
             let count = store.exists_many(&keys);
             println!("{} key(s) exist", count);
         }
         Commands::Keys { pattern } => {
+            should_save = false;
             let matching_keys = store.keys(&pattern);
             if matching_keys.is_empty() {
                 println!("No keys match pattern '{}'", pattern);
@@ -135,6 +149,7 @@ fn main() {
             }
         }
         Commands::Stats => {
+            should_save = false;
             let stats = store.stats();
             println!("=== Store Statistics ===");
             println!("Total keys: {}", stats.total_keys);
@@ -174,10 +189,13 @@ fn main() {
             Ok(count) => println!("{} ≈ {} unique values", key, count),
             Err(e) => eprintln!("Error: {}", e),
         },
-        Commands::PfCount { key } => match store.pfcount(&key) {
-            Ok(count) => println!("{} ≈ {} unique values", key, count),
-            Err(e) => eprintln!("Error: {}", e),
-        },
+        Commands::PfCount { key } => {
+            should_save = false;
+            match store.pfcount(&key) {
+                Ok(count) => println!("{} ≈ {} unique values", key, count),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
         Commands::PfMerge {
             destination,
             sources,
@@ -196,6 +214,7 @@ fn main() {
             Err(e) => eprintln!("Error: {}", e),
         },
         Commands::Benchmark => {
+            should_save = false;
             println!("Running performance benchmarks...");
             match Command::new("cargo")
                 .args(["bench", "--bench", "performance", "--", "--quiet"])
@@ -205,6 +224,13 @@ fn main() {
                 Ok(status) => eprintln!("Benchmark failed with exit code: {:?}", status.code()),
                 Err(e) => eprintln!("Failed to execute benchmark: {}", e),
             }
+        }
+    }
+
+    // Auto-save after write operations
+    if should_save {
+        if let Err(e) = store.save_with_version(&file_path, 3) {
+            eprintln!("Warning: Failed to auto-save store: {}", e);
         }
     }
 

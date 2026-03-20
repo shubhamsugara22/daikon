@@ -2,6 +2,7 @@
 name = "rust_kv_store"
 version = "0.2.0"
 edition = "2021"
+default-run = "rust_kv_store"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

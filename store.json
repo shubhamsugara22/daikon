@@ -1,12 +1,33 @@
 {
-  "store": {},
+  "store": {
+    "user:3": {
+      "value": {
+        "Str": "Bob Smith"
+      },
+      "expires_at": null
+    },
+    "user:2": {
+      "value": {
+        "Str": "Jane Doe"
+      },
+      "expires_at": null
+    },
+    "user:1": {
+      "value": {
+        "Str": "Alice"
+      },
+      "expires_at": null
+    }
+  },
   "stats": {
-    "total_keys": 0,
+    "total_keys": 3,
     "expired_keys": 0,
     "total_reads": 0,
-    "total_writes": 0,
+    "total_writes": 4,
     "total_deletes": 0,
     "hits": 0,
-    "misses": 0
+    "misses": 0,
+    "memory_bytes": 30,
+    "evictions": 0
   }
 }

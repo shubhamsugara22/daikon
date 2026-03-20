@@ -118,10 +118,20 @@ pub async fn set_value(
     key: web::Path<String>,
     req: web::Json<SetRequest>,
 ) -> impl Responder {
+    // Convert string to Value and serialize it for WAL
+    let value: crate::kv_store::Value = req.value.clone().into();
+    let value_json = match serde_json::to_string(&value) {
+        Ok(json) => json,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .body(format!("Failed to serialize value: {}", e))
+        }
+    };
+
     // Log to WAL first (durability-first)
     let entry = WalEntry::new(WalOperation::Set {
         key: key.to_string(),
-        value: req.value.clone(),
+        value: value_json,
         ttl_secs: None,
     });
     if let Err(e) = wal.append(&entry) {

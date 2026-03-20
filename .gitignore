@@ -1,3 +1,8 @@
 /target
 Cargo.lock
 store.json.bak.*
+server_store.json.bak.*
+server_store.json
+store.json
+server.wal
+snapshots/
