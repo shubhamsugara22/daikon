@@ -41,6 +41,7 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
 
 ### Comprehensive Testing
 - **87 Total Tests**: 30 library tests (incl. WAL + PITR + replication + pubsub + hyperloglog tests) + 11 API endpoint tests + 46 integration tests
+- **90 Total Tests**: 32 library tests (incl. WAL + PITR + replication + pubsub + hyperloglog + lua tests) + 12 API endpoint tests + 46 integration tests
 - **100% Pass Rate**: All tests passing
 - **Coverage**:
   - Input validation (empty keys, size limits)
@@ -54,6 +55,8 @@ A high-performance, feature-rich in-memory key-value store written in Rust with 
   - Persistence (save/load/versioning)
   - Pub/Sub messaging (subscribe/publish/poll)
   - HyperLogLog cardinality estimation (pfadd/pfcount/pfmerge)
+  - HyperLogLog cardinality estimation (pfadd/pfcount/pfmerge)
+  - Lua scripting (execute arbitrary scripts against the store)
 
 ## Features Status
 
@@ -115,6 +118,12 @@ cargo run -- stats
 cargo run -- cleanup
 cargo run -- list
 cargo run -- save --versions 3
+```
+
+```bash
+# Lua scripting
+cargo run -- lua --script "set('x', 'hello'); return get('x')"
+cargo run -- lua --script "if exists('x') then return get('x') else return 'missing' end"
 ```
 
 ### REST API
@@ -203,6 +212,7 @@ rust-kv-store/
 - [x] **Pub/Sub Messaging**: Event subscription and publishing - **IMPLEMENTED**
 - [ ] **Transactions**: MULTI/EXEC operations with rollback (partial - basic support exists)
 - [ ] **Lua Scripting**: Custom script execution
+- [x] **Lua Scripting**: Custom script execution - **IMPLEMENTED**
 - [ ] **Stream Data Type**: Time-series data support
 - [x] **HyperLogLog**: Cardinality estimation - **IMPLEMENTED**
 
@@ -370,6 +380,58 @@ curl http://localhost:8080/api/hll/visitors/count
 curl -X POST http://localhost:8080/api/hll/visitors_all/merge \
   -H "Content-Type: application/json" \
   -d '{"sources": ["visitors_web", "visitors_mobile"]}'
+```
+
+### Concurrency
+
+#### Lua Scripting
+- **Purpose**: Run arbitrary Lua 5.4 scripts against the live store in a single atomic operation
+- **Engine**: Embedded Lua 5.4 via [`mlua`](https://crates.io/crates/mlua) (vendored, no external Lua install required)
+- **WAL Integration**: `set`, `delete`, and `incr` calls from Lua are logged to the WAL when run via the REST API
+- **Globals exposed to scripts**:
+  - `get(key)` → returns the value as a string, or `nil` if not found
+  - `set(key, value)` → stores a string value; returns `true`
+  - `delete(key)` → removes a key; returns `true` if it existed
+  - `incr(key)` → increments an integer key by 1; returns the new integer value (key must exist as an integer)
+  - `exists(key)` → returns `true`/`false`
+  - `print(msg)` → appends a line to the script output
+- **Output**: Script `return` values and `print()` calls are concatenated and returned as a single string
+- **CLI Command**: `cargo run -- lua --script "set('x', 'hello'); return get('x')"`
+- **API Endpoint**: `POST /api/lua/exec` with `{ "script": "..." }`
+
+**Lua scripting examples:**
+
+```bash
+# CLI: simple set + get
+cargo run -- lua --script "set('name', 'daikon'); return get('name')"
+# Output: daikon
+
+# CLI: increment an integer key (must be pre-seeded as an integer)
+cargo run -- set counter 0
+cargo run -- lua --script "incr('counter'); incr('counter'); return get('counter')"
+# Output: 2
+
+# CLI: conditional logic
+cargo run -- lua --script "
+  if exists('x') then
+    return 'found: ' .. get('x')
+  else
+    set('x', 'init')
+    return 'created'
+  end
+"
+
+# REST API: execute a Lua script
+curl -X POST http://localhost:8080/api/lua/exec \
+  -H "Content-Type: application/json" \
+  -d '{"script": "set(\"greeting\", \"hello\"); return get(\"greeting\")"}'
+# Response: {"output":"hello"}
+
+# REST API: multi-step script with print output
+curl -X POST http://localhost:8080/api/lua/exec \
+  -H "Content-Type: application/json" \
+  -d '{"script": "set(\"a\", \"1\"); set(\"b\", \"2\"); print(\"done\"); return exists(\"a\"), exists(\"b\")"}'
+# Response: {"output":"done\ntrue true"}
 ```
 
 ### Concurrency

@@ -140,6 +140,8 @@ mod tests {
     #[test]
     fn test_lua_incr_and_exists() {
         let mut store = KvStore::new();
+        // Pre-seed key as Value::Int so incr can operate on it
+        store.set("n".to_string(), 0i64).expect("seed set failed");
         let output = execute_script(&mut store, None, "incr('n'); return exists('n'), get('n')")
             .expect("lua script failed");
 
