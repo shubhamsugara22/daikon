@@ -71,6 +71,8 @@ pub enum Commands {
         destination: String,
         sources: Vec<String>,
     },
+    /// Execute a Lua script string against the store
+    Lua { script: String },
     /// Run performance benchmark suite
     Benchmark,
 }

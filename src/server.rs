@@ -323,7 +323,9 @@ async fn main() -> std::io::Result<()> {
                 // HyperLogLog operations
                 .route("/hll/{key}/add", web::post().to(api::hll_pfadd))
                 .route("/hll/{key}/count", web::get().to(api::hll_pfcount))
-                .route("/hll/{destination}/merge", web::post().to(api::hll_pfmerge)),
+                .route("/hll/{destination}/merge", web::post().to(api::hll_pfmerge))
+                // Lua scripting
+                .route("/lua/exec", web::post().to(api::lua_exec)),
         )
     })
     .bind(&bind)?

@@ -3,6 +3,7 @@ use clap::Parser;
 use rust_kv_store::{
     cli::{Cli, Commands},
     kv_store::KvStore,
+    lua,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -182,6 +183,16 @@ fn main() {
             sources,
         } => match store.pfmerge(destination.clone(), &sources) {
             Ok(count) => println!("{} ≈ {} unique values after merge", destination, count),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::Lua { script } => match lua::execute_script(&mut store, None, &script) {
+            Ok(output) => {
+                if output.is_empty() {
+                    println!("Lua script executed (no output)");
+                } else {
+                    println!("{}", output);
+                }
+            }
             Err(e) => eprintln!("Error: {}", e),
         },
         Commands::Benchmark => {

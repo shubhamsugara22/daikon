@@ -20,6 +20,7 @@ crossbeam = "0.8" # Atomic operations utilities
 flate2 = "1.0"
 zstd = "0.13"
 uuid = { version = "1.6", features = ["v4", "serde"] }
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
 reqwest = { version = "0.11", features = [
 	"blocking",
 	"json",

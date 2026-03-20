@@ -3,6 +3,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::kv_store::KvStore;
+use crate::lua;
 use crate::pitr::Pitr;
 use crate::pubsub::{PubSub, PubSubMessage};
 use crate::replication::{ReplicationMaster, ReplicationReplica};
@@ -693,6 +694,16 @@ pub struct HllCountResponse {
     pub count: u64,
 }
 
+#[derive(Deserialize)]
+pub struct LuaExecRequest {
+    pub script: String,
+}
+
+#[derive(Serialize)]
+pub struct LuaExecResponse {
+    pub output: String,
+}
+
 // POST /api/hll/{key}/add
 // Add values to a HyperLogLog key; returns the new estimated cardinality.
 pub async fn hll_pfadd(
@@ -736,6 +747,20 @@ pub async fn hll_pfmerge(
             key: destination.to_string(),
             count,
         }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// POST /api/lua/exec
+// Execute a Lua script against the store with built-in helpers.
+pub async fn lua_exec(
+    store: WebKvStore,
+    wal: WebWal,
+    req: web::Json<LuaExecRequest>,
+) -> impl Responder {
+    let mut store = store.write();
+    match lua::execute_script(&mut store, Some(&wal), &req.script) {
+        Ok(output) => HttpResponse::Ok().json(LuaExecResponse { output }),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
