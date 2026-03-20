@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod hyperloglog;
 pub mod kv_store;
+pub mod lua;
 pub mod pitr;
 pub mod pubsub;
 pub mod replication;

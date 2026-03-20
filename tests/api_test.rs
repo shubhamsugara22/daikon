@@ -271,3 +271,30 @@ async fn test_api_hll_pfmerge() {
     assert_eq!(body["key"], "dst");
     assert!(body["count"].as_u64().unwrap() > 0);
 }
+
+#[actix_web::test]
+async fn test_api_lua_exec_set_and_get() {
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("test_lua.wal")).unwrap());
+    let store = Arc::new(RwLock::new(KvStore::new()));
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(Arc::clone(&store)))
+            .app_data(web::Data::from(Arc::clone(&wal)))
+            .service(web::scope("/api").route("/lua/exec", web::post().to(api::lua_exec))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/lua/exec")
+        .set_json(serde_json::json!({
+            "script": "set('name', 'daikon'); return get('name')"
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    assert_eq!(body["output"], "daikon");
+}
