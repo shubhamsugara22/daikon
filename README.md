@@ -142,6 +142,11 @@ curl -X PUT http://localhost:8080/api/keys/mykey \
   -H "Content-Type: application/json" \
   -d '{"value": "myvalue"}'
 
+# Session-style key with TTL (seconds)
+curl -X PUT http://localhost:8080/api/keys/session:abc123 \
+  -H "Content-Type: application/json" \
+  -d '{"value": "user-42", "ttl_secs": 3600}'
+
 curl http://localhost:8080/api/keys/mykey
 
 # Atomic operations
@@ -157,9 +162,41 @@ curl -X POST http://localhost:8080/api/mget \
 
 # Statistics
 curl http://localhost:8080/api/stats
+curl http://localhost:8080/api/metrics
+
+# Health checks
+curl http://localhost:8080/api/health/live
+curl http://localhost:8080/api/health/ready
 
 # Pattern matching
 curl http://localhost:8080/api/keys/pattern/user:*
+```
+
+## Operational Controls
+
+- `KV_API_KEY`: Optional API key for mutating HTTP endpoints. Send it as `x-api-key: ...` or `Authorization: Bearer ...`.
+- `KV_ENABLE_LUA`: Set to `false` to disable Lua execution over HTTP.
+- `KV_MAX_LUA_SCRIPT_BYTES`: Maximum Lua script payload size for `POST /api/lua/exec` (default `16384`).
+- `KV_BIND`: HTTP bind address (default `127.0.0.1:8080`).
+
+## Docker
+
+```bash
+docker build -t daikon-kv .
+
+docker run --rm -p 8080:8080 \
+  -e KV_BIND=0.0.0.0:8080 \
+  -e KV_API_KEY=demo-secret \
+  daikon-kv
+```
+
+Example authenticated write:
+
+```bash
+curl -X PUT http://localhost:8080/api/keys/demo \
+  -H "x-api-key: demo-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"value": "hello"}'
 ```
 
 ## Documentation
@@ -351,8 +388,10 @@ curl http://localhost:8080/api/pubsub/channels/alerts/subscribers
   - `cargo run -- pf-count visitors`
   - `cargo run -- pf-merge all_visitors visitors_web visitors_mobile`
 - **API Endpoints**:
+  - `POST /api/hll/{key}/reserve` with `{ "precision": 12 }`
   - `POST /api/hll/{key}/add` with `{ "values": ["user1", "user2"] }`
   - `GET /api/hll/{key}/count`
+  - `GET /api/hll/{key}/info`
   - `POST /api/hll/{destination}/merge` with `{ "sources": ["src1", "src2"] }`
 
 **HyperLogLog examples:**
@@ -369,6 +408,12 @@ cargo run -- pf-merge visitors_all visitors_web visitors_mobile
 cargo run -- pf-count visitors_all
 
 # REST API add values
+curl -X POST http://localhost:8080/api/hll/visitors/reserve \
+  -H "Content-Type: application/json" \
+  -d '{"precision": 12}'
+
+curl -X GET http://localhost:8080/api/hll/visitors/info
+
 curl -X POST http://localhost:8080/api/hll/visitors/add \
   -H "Content-Type: application/json" \
   -d '{"values": ["user1", "user2", "user3"]}'
@@ -382,12 +427,11 @@ curl -X POST http://localhost:8080/api/hll/visitors_all/merge \
   -d '{"sources": ["visitors_web", "visitors_mobile"]}'
 ```
 
-### Concurrency
-
 #### Lua Scripting
 - **Purpose**: Run arbitrary Lua 5.4 scripts against the live store in a single atomic operation
 - **Engine**: Embedded Lua 5.4 via [`mlua`](https://crates.io/crates/mlua) (vendored, no external Lua install required)
 - **WAL Integration**: `set`, `delete`, and `incr` calls from Lua are logged to the WAL when run via the REST API
+- **Safety Controls**: HTTP Lua execution can be disabled with `KV_ENABLE_LUA=false`, enforces request size via `KV_MAX_LUA_SCRIPT_BYTES`, and rejects execution while a transaction is open
 - **Globals exposed to scripts**:
   - `get(key)` → returns the value as a string, or `nil` if not found
   - `set(key, value)` → stores a string value; returns `true`
