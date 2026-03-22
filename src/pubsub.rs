@@ -75,7 +75,11 @@ impl PubSub {
     ///
     /// # Returns
     /// The subscriber ID (for polling messages)
-    pub fn subscribe(&self, channel: String, subscriber_id: String) -> Result<String, KvStoreError> {
+    pub fn subscribe(
+        &self,
+        channel: String,
+        subscriber_id: String,
+    ) -> Result<String, KvStoreError> {
         if channel.is_empty() {
             return Err(KvStoreError::InvalidKey(
                 "Channel name cannot be empty".to_string(),
@@ -237,10 +241,14 @@ mod tests {
     fn test_subscribe_and_publish() {
         let pubsub = PubSub::new();
         let sub_id = PubSub::new_subscriber_id();
-        
-        pubsub.subscribe("news".to_string(), sub_id.clone()).unwrap();
-        let count = pubsub.publish("news".to_string(), "breaking news".to_string()).unwrap();
-        
+
+        pubsub
+            .subscribe("news".to_string(), sub_id.clone())
+            .unwrap();
+        let count = pubsub
+            .publish("news".to_string(), "breaking news".to_string())
+            .unwrap();
+
         assert_eq!(count, 1);
         let messages = pubsub.poll_messages(sub_id, 10).unwrap();
         assert_eq!(messages.len(), 1);
@@ -252,16 +260,22 @@ mod tests {
         let pubsub = PubSub::new();
         let sub1 = PubSub::new_subscriber_id();
         let sub2 = PubSub::new_subscriber_id();
-        
-        pubsub.subscribe("alerts".to_string(), sub1.clone()).unwrap();
-        pubsub.subscribe("alerts".to_string(), sub2.clone()).unwrap();
-        
-        let count = pubsub.publish("alerts".to_string(), "alert message".to_string()).unwrap();
+
+        pubsub
+            .subscribe("alerts".to_string(), sub1.clone())
+            .unwrap();
+        pubsub
+            .subscribe("alerts".to_string(), sub2.clone())
+            .unwrap();
+
+        let count = pubsub
+            .publish("alerts".to_string(), "alert message".to_string())
+            .unwrap();
         assert_eq!(count, 2);
-        
+
         let msg1 = pubsub.poll_messages(sub1, 10).unwrap();
         let msg2 = pubsub.poll_messages(sub2, 10).unwrap();
-        
+
         assert_eq!(msg1.len(), 1);
         assert_eq!(msg2.len(), 1);
     }
@@ -270,11 +284,17 @@ mod tests {
     fn test_unsubscribe() {
         let pubsub = PubSub::new();
         let sub_id = PubSub::new_subscriber_id();
-        
-        pubsub.subscribe("channel".to_string(), sub_id.clone()).unwrap();
-        pubsub.unsubscribe("channel".to_string(), sub_id.clone()).unwrap();
-        
-        let count = pubsub.publish("channel".to_string(), "msg".to_string()).unwrap();
+
+        pubsub
+            .subscribe("channel".to_string(), sub_id.clone())
+            .unwrap();
+        pubsub
+            .unsubscribe("channel".to_string(), sub_id.clone())
+            .unwrap();
+
+        let count = pubsub
+            .publish("channel".to_string(), "msg".to_string())
+            .unwrap();
         assert_eq!(count, 0);
     }
 
@@ -282,13 +302,21 @@ mod tests {
     fn test_multiple_channels() {
         let pubsub = PubSub::new();
         let sub_id = PubSub::new_subscriber_id();
-        
-        pubsub.subscribe("sports".to_string(), sub_id.clone()).unwrap();
-        pubsub.subscribe("weather".to_string(), sub_id.clone()).unwrap();
-        
-        pubsub.publish("sports".to_string(), "goal!".to_string()).unwrap();
-        pubsub.publish("weather".to_string(), "rain".to_string()).unwrap();
-        
+
+        pubsub
+            .subscribe("sports".to_string(), sub_id.clone())
+            .unwrap();
+        pubsub
+            .subscribe("weather".to_string(), sub_id.clone())
+            .unwrap();
+
+        pubsub
+            .publish("sports".to_string(), "goal!".to_string())
+            .unwrap();
+        pubsub
+            .publish("weather".to_string(), "rain".to_string())
+            .unwrap();
+
         let messages = pubsub.poll_messages(sub_id, 10).unwrap();
         assert_eq!(messages.len(), 2);
     }
@@ -297,10 +325,10 @@ mod tests {
     fn test_list_channels() {
         let pubsub = PubSub::new();
         let sub_id = PubSub::new_subscriber_id();
-        
+
         pubsub.subscribe("ch1".to_string(), sub_id.clone()).unwrap();
         pubsub.subscribe("ch2".to_string(), sub_id.clone()).unwrap();
-        
+
         let channels = pubsub.list_channels().unwrap();
         assert_eq!(channels.len(), 2);
         assert!(channels.contains(&"ch1".to_string()));
@@ -311,11 +339,17 @@ mod tests {
     fn test_pending_message_count() {
         let pubsub = PubSub::new();
         let sub_id = PubSub::new_subscriber_id();
-        
-        pubsub.subscribe("channel".to_string(), sub_id.clone()).unwrap();
-        pubsub.publish("channel".to_string(), "msg1".to_string()).unwrap();
-        pubsub.publish("channel".to_string(), "msg2".to_string()).unwrap();
-        
+
+        pubsub
+            .subscribe("channel".to_string(), sub_id.clone())
+            .unwrap();
+        pubsub
+            .publish("channel".to_string(), "msg1".to_string())
+            .unwrap();
+        pubsub
+            .publish("channel".to_string(), "msg2".to_string())
+            .unwrap();
+
         let count = pubsub.pending_message_count(sub_id).unwrap();
         assert_eq!(count, 2);
     }
@@ -324,10 +358,12 @@ mod tests {
     fn test_empty_channel_cleanup() {
         let pubsub = PubSub::new();
         let sub_id = PubSub::new_subscriber_id();
-        
-        pubsub.subscribe("channel".to_string(), sub_id.clone()).unwrap();
+
+        pubsub
+            .subscribe("channel".to_string(), sub_id.clone())
+            .unwrap();
         pubsub.unsubscribe("channel".to_string(), sub_id).unwrap();
-        
+
         let channels = pubsub.list_channels().unwrap();
         assert!(channels.is_empty());
     }

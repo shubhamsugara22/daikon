@@ -128,7 +128,11 @@ mod tests {
         }
 
         let count = hll.count();
-        assert!(count <= 5, "duplicate-heavy count should stay small, got {}", count);
+        assert!(
+            count <= 5,
+            "duplicate-heavy count should stay small, got {}",
+            count
+        );
     }
 
     #[test]
@@ -148,7 +152,11 @@ mod tests {
         let after = left.count();
 
         assert!(after >= before);
-        assert!(after >= 5, "expected merged count to reflect union, got {}", after);
+        assert!(
+            after >= 5,
+            "expected merged count to reflect union, got {}",
+            after
+        );
     }
 
     #[test]

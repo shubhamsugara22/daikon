@@ -520,15 +520,9 @@ fn test_pubsub_multiple_subscribers() {
     assert_eq!(count, 3, "should have 3 subscribers");
 
     // Each subscriber should get the message
-    let msg1 = pubsub
-        .poll_messages(sub1, 10)
-        .expect("poll1 failed");
-    let msg2 = pubsub
-        .poll_messages(sub2, 10)
-        .expect("poll2 failed");
-    let msg3 = pubsub
-        .poll_messages(sub3, 10)
-        .expect("poll3 failed");
+    let msg1 = pubsub.poll_messages(sub1, 10).expect("poll1 failed");
+    let msg2 = pubsub.poll_messages(sub2, 10).expect("poll2 failed");
+    let msg3 = pubsub.poll_messages(sub3, 10).expect("poll3 failed");
 
     assert_eq!(msg1.len(), 1);
     assert_eq!(msg2.len(), 1);
@@ -561,9 +555,7 @@ fn test_pubsub_unsubscribe() {
     assert_eq!(count, 1, "should have 1 subscriber after unsubscribe");
 
     // Only sub2 should have the message
-    let messages = pubsub
-        .poll_messages(sub2, 10)
-        .expect("poll failed");
+    let messages = pubsub.poll_messages(sub2, 10).expect("poll failed");
     assert_eq!(messages.len(), 1);
 }
 
@@ -595,14 +587,11 @@ fn test_pubsub_multiple_channels() {
         .expect("publish to tech failed");
 
     // Poll all messages (should be 3)
-    let messages = pubsub
-        .poll_messages(sub, 10)
-        .expect("poll failed");
+    let messages = pubsub.poll_messages(sub, 10).expect("poll failed");
     assert_eq!(messages.len(), 3);
 
     // Verify we got messages from all channels
-    let channels: std::collections::HashSet<_> =
-        messages.iter().map(|m| &m.channel).collect();
+    let channels: std::collections::HashSet<_> = messages.iter().map(|m| &m.channel).collect();
     assert_eq!(channels.len(), 3);
 }
 
@@ -623,9 +612,7 @@ fn test_pubsub_list_channels() {
         .expect("subscribe to ch3 failed");
 
     // List channels
-    let channels = pubsub
-        .list_channels()
-        .expect("list channels failed");
+    let channels = pubsub.list_channels().expect("list channels failed");
     assert_eq!(channels.len(), 3);
     assert!(channels.contains(&"ch1".to_string()));
     assert!(channels.contains(&"ch2".to_string()));
@@ -684,9 +671,7 @@ fn test_pubsub_pending_message_count() {
     assert_eq!(count, 3);
 
     // Poll one message and check count again
-    pubsub
-        .poll_messages(sub.clone(), 1)
-        .expect("poll failed");
+    pubsub.poll_messages(sub.clone(), 1).expect("poll failed");
     let count = pubsub
         .pending_message_count(sub)
         .expect("pending count failed");
@@ -708,9 +693,7 @@ fn test_pubsub_empty_channel_cleanup() {
         .expect("unsubscribe failed");
 
     // Channel should be cleaned up
-    let channels = pubsub
-        .list_channels()
-        .expect("list channels failed");
+    let channels = pubsub.list_channels().expect("list channels failed");
     assert!(channels.is_empty(), "empty channels should be cleaned up");
 }
 
@@ -731,9 +714,7 @@ fn test_pubsub_message_fifo_order() {
     }
 
     // Poll and verify FIFO order
-    let messages = pubsub
-        .poll_messages(sub, 10)
-        .expect("poll failed");
+    let messages = pubsub.poll_messages(sub, 10).expect("poll failed");
     assert_eq!(messages.len(), 5);
 
     for (i, msg) in messages.iter().enumerate() {
@@ -747,7 +728,10 @@ fn test_pubsub_message_fifo_order() {
 fn test_hll_pfadd_returns_positive_count() {
     let mut store = KvStore::new();
     let count = store
-        .pfadd("hll1".to_string(), vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        .pfadd(
+            "hll1".to_string(),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        )
         .expect("pfadd failed");
     assert!(count > 0, "estimated cardinality should be at least 1");
 }
@@ -814,11 +798,12 @@ fn test_hll_pfmerge_combines_estimates() {
 #[test]
 fn test_hll_type_mismatch_on_string_key() {
     let mut store = KvStore::new();
-    store.set("strkey".to_string(), "hello".to_string()).expect("set failed");
+    store
+        .set("strkey".to_string(), "hello".to_string())
+        .expect("set failed");
     let result = store.pfcount("strkey");
     assert!(
         matches!(result, Err(KvStoreError::TypeMismatch { .. })),
         "pfcount on a String key should return TypeMismatch"
     );
 }
-
