@@ -1,4 +1,5 @@
 use actix_cors::Cors;
+use actix_web::http::header;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{web, App, HttpServer};
 use parking_lot::RwLock;
@@ -283,8 +284,40 @@ async fn main() -> std::io::Result<()> {
         max_lua_script_bytes,
     };
 
+    let cors_origin_for_server = cors_origin.clone();
+
     let server = HttpServer::new(move || {
+        // CORS configuration
+        let cors = if let Some(ref origin) = cors_origin_for_server {
+            if origin == "*" {
+                Cors::permissive()
+            } else {
+                Cors::default()
+                    .allowed_origin(origin)
+                    .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])
+                    .allowed_headers(vec![
+                        header::CONTENT_TYPE,
+                        header::AUTHORIZATION,
+                        header::HeaderName::from_static("x-api-key"),
+                    ])
+                    .max_age(3600)
+            }
+        } else {
+            Cors::default()
+        };
+
         let mut app = App::new()
+            .wrap(cors)
+            .wrap(actix_web::middleware::Logger::new("%a \"%r\" %s %b %Dms"))
+            .wrap(
+                DefaultHeaders::new()
+                    .add(("X-Content-Type-Options", "nosniff"))
+                    .add(("X-Frame-Options", "DENY"))
+                    .add(("X-XSS-Protection", "1; mode=block"))
+                    .add(("Cache-Control", "no-store")),
+            )
+            .app_data(web::JsonConfig::default().limit(max_payload_bytes))
+            .app_data(web::PayloadConfig::default().limit(max_payload_bytes))
             .app_data(web::Data::from(Arc::clone(&store)))
             .app_data(web::Data::from(Arc::clone(&wal)))
             .app_data(web::Data::from(Arc::clone(&pitr)))
@@ -395,8 +428,15 @@ async fn main() -> std::io::Result<()> {
                 .route("/lua/exec", web::post().to(api::lua_exec)),
         )
     })
-    .bind(&bind)?
-    .run();
+    .max_connections(max_connections);
+
+    let server = if workers > 0 {
+        server.workers(workers)
+    } else {
+        server
+    };
+
+    let server = server.bind(&bind)?.run();
 
     let server_handle = server.handle();
 
@@ -492,48 +532,6 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
                         .collect();
                     let _ = store.mset(pair_strings); // Ignore errors during replay
                 }
-            }
-            WalOperation::PfAdd { key, values } => {
-                let _ = store.pfadd(key.clone(), values.clone());
-            }
-            WalOperation::PfMerge {
-                destination,
-                sources,
-            } => {
-                let _ = store.pfmerge(destination.clone(), sources);
-            }
-        }
-    }
-
-    info!("WAL replay completed successfully");
-    Ok(store)
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to setup SIGTERM handler");
-        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to setup SIGINT handler");
-
-        tokio::select! {
-            _ = sigterm.recv() => info!("Received SIGTERM"),
-            _ = sigint.recv() => info!("Received SIGINT"),
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        use tokio::signal::windows;
-        let mut ctrl_c = windows::ctrl_c().expect("Failed to setup Ctrl-C handler");
-        let mut ctrl_break = windows::ctrl_break().expect("Failed to setup Ctrl-Break handler");
-
-        tokio::select! {
-            _ = ctrl_c.recv() => info!("Received Ctrl-C"),
-            _ = ctrl_break.recv() => info!("Received Ctrl-Break"),
-        }
-    }
-}
             }
             WalOperation::PfAdd { key, values } => {
                 let _ = store.pfadd(key.clone(), values.clone());
