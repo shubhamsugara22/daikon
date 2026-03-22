@@ -1,0 +1,36 @@
+services:
+  daikon:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      KV_BIND: "0.0.0.0:8080"
+      KV_API_KEY: "${KV_API_KEY}"
+      KV_SNAPSHOT_INTERVAL_SECS: "300"
+      KV_SNAPSHOT_COMPRESSION: "zstd"
+      KV_MAX_PAYLOAD_BYTES: "16777216"
+      KV_MAX_CONNECTIONS: "25000"
+      KV_ENABLE_LUA: "true"
+      RUST_LOG: "info"
+    volumes:
+      - daikon-data:/app/data
+      - daikon-snapshots:/app/snapshots
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/health/live"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  daikon-data:
+  daikon-snapshots:

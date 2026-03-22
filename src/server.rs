@@ -1,3 +1,5 @@
+use actix_cors::Cors;
+use actix_web::middleware::DefaultHeaders;
 use actix_web::{web, App, HttpServer};
 use parking_lot::RwLock;
 use rust_kv_store::pitr::Pitr;
@@ -53,6 +55,21 @@ async fn main() -> std::io::Result<()> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(16 * 1024);
 
+    // Server resource limits
+    let max_payload_bytes: usize = env::var("KV_MAX_PAYLOAD_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(16 * 1024 * 1024); // 16 MB default
+    let workers: usize = env::var("KV_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0); // 0 = num logical CPUs (actix default)
+    let max_connections: usize = env::var("KV_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(25000);
+    let cors_origin = env::var("KV_CORS_ORIGIN").ok();
+
     // Replication configuration
     let node_role = env::var("KV_NODE_ROLE")
         .unwrap_or_else(|_| "master".into())
@@ -84,6 +101,16 @@ async fn main() -> std::io::Result<()> {
     info!(
         "Lua runtime: enabled={}, max_script_bytes={}",
         lua_enabled, max_lua_script_bytes
+    );
+    info!(
+        "Server limits: max_payload={}B, max_connections={}, workers={}",
+        max_payload_bytes,
+        max_connections,
+        if workers == 0 {
+            "auto".to_string()
+        } else {
+            workers.to_string()
+        }
     );
 
     info!("Node role: {:?}", replication_role);
@@ -465,6 +492,48 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
                         .collect();
                     let _ = store.mset(pair_strings); // Ignore errors during replay
                 }
+            }
+            WalOperation::PfAdd { key, values } => {
+                let _ = store.pfadd(key.clone(), values.clone());
+            }
+            WalOperation::PfMerge {
+                destination,
+                sources,
+            } => {
+                let _ = store.pfmerge(destination.clone(), sources);
+            }
+        }
+    }
+
+    info!("WAL replay completed successfully");
+    Ok(store)
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to setup SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to setup SIGINT handler");
+
+        tokio::select! {
+            _ = sigterm.recv() => info!("Received SIGTERM"),
+            _ = sigint.recv() => info!("Received SIGINT"),
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows;
+        let mut ctrl_c = windows::ctrl_c().expect("Failed to setup Ctrl-C handler");
+        let mut ctrl_break = windows::ctrl_break().expect("Failed to setup Ctrl-Break handler");
+
+        tokio::select! {
+            _ = ctrl_c.recv() => info!("Received Ctrl-C"),
+            _ = ctrl_break.recv() => info!("Received Ctrl-Break"),
+        }
+    }
+}
             }
             WalOperation::PfAdd { key, values } => {
                 let _ = store.pfadd(key.clone(), values.clone());
