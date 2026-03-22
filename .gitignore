@@ -7,4 +7,3 @@ store.json
 server.wal
 snapshots/
 target/
-.github/
