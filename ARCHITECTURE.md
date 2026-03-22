@@ -87,21 +87,21 @@ sequenceDiagram
     actor Client
     participant HTTP as HTTP Server
     participant API as API Handler
-    participant Mutex as Mutex Lock
+    participant RwLock as RwLock
     participant Store as KvStore
     participant Stats as StoreStats
 
     Client->>HTTP: HTTP Request<br/>POST /api/incr/counter
     HTTP->>API: Route to handler<br/>incr_value()
-    API->>Mutex: Acquire lock
-    Mutex->>Store: Get mutable reference
+    API->>RwLock: Acquire write lock
+    RwLock->>Store: Get mutable reference
     
     API->>Store: incr("counter")
     Store->>Store: Validate & increment
     Store->>Stats: Update metrics<br/>(writes++, total_ops++)
     Store-->>API: Return new value (11)
     
-    API->>Mutex: Release lock
+    API->>RwLock: Release lock
     API->>HTTP: JSON Response<br/>{"value": 11}
     HTTP->>Client: 200 OK
 ```

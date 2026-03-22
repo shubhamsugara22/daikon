@@ -295,10 +295,6 @@ cargo run -- stats
 ## What's Next?
 
 Potential future enhancements:
-- Background TTL cleanup task
-- Pub/Sub messaging
-- Transactions (BEGIN/COMMIT/ROLLBACK)
 - List, Set, and Hash data types
-- LRU eviction policy
-- Write-Ahead Log (WAL)
-- Replication support
+- Stream/time-series data type
+- Background TTL cleanup task

@@ -1,82 +1,23 @@
-# Rust In-Memory Key-Value Store
+# Daikon — Rust In-Memory Key-Value Store
 
-A high-performance, feature-rich in-memory key-value store written in Rust with both CLI and REST API interfaces.
+An in-memory key-value store written in Rust with a CLI and an HTTP API (actix-web).
 
-## Production Readiness (Phase 1 ✅)
+## Features
 
-### Error Handling
-- **Custom Error Types**: Typed error handling with `KvStoreError` enum
-  - `KeyNotFound`: Operation on non-existent key
-  - `TypeMismatch`: Operation type incompatible with stored value
-  - `InvalidKey`: Key validation failures (empty or too large)
-  - `InvalidValue`: Value validation failures (exceeds size limit)
-  - `InvalidConfig`: Configuration validation failures
-  - `MemoryExceeded`: Memory limit enforcement
-  - `IoError`: File I/O operation failures
-  - `JsonError`: Serialization/deserialization failures
+- **Data types** — String, Integer, Float, Boolean, JSON, HyperLogLog
+- **TTL** — per-key expiration with manual and automatic cleanup
+- **Persistence** — JSON snapshots, versioned backups, optional gzip/zstd compression
+- **WAL** — write-ahead log for crash recovery, replayed on startup
+- **PITR** — point-in-time recovery from periodic or on-demand snapshots
+- **Replication** — master/replica with WAL-based sync
+- **Pub/Sub** — channel-based publish/subscribe with per-subscriber queues
+- **Lua scripting** — embedded Lua 5.4 (mlua) with store bindings
+- **Transactions** — MULTI/EXEC/DISCARD with queued writes
+- **LRU eviction** — configurable memory cap with least-recently-used eviction
+- **Auth** — optional API-key gating on mutating endpoints
+- **Observability** — Prometheus-style `/api/metrics`, health probes, access logging
 
-### Input Validation
-- **Key Validation**: Empty keys rejected, configurable size limits (default 1KB)
-- **Value Validation**: Configurable size limits per data type (default 10MB)
-- **Config Validation**: All configuration values validated on creation
-- **Type Safety**: Strict type checking for atomic operations
-
-### Memory Management
-- **LRU Eviction**: Least-recently-used key eviction when memory limit exceeded
-- **Memory Tracking**: Accurate byte counting for all values
-- **Configurable Limits**: Default 1GB per-store memory limit
-- **Live Stats**: Real-time memory usage and eviction tracking
-
-### Structured Logging
-- **Tracing Integration**: Using `tracing` and `tracing-subscriber`
-- **Configurable Levels**: Set via `RUST_LOG` environment variable (defaults to "info")
-- **Structured Events**: Tagged debug/info logs throughout core operations
-- **Zero-cost in Release**: Enables efficient production debugging
-
-### Graceful Shutdown
-- **Signal Handling**: Responds to Ctrl-C, SIGTERM, and SIGINT
-- **State Persistence**: Automatically saves store before shutdown
-- **Clean Exit**: Graceful server termination with connection cleanup
-- **Cross-Platform**: Windows (Ctrl-C/Ctrl-Break) and Unix (SIGTERM/SIGINT) support
-
-### Comprehensive Testing
-- **87 Total Tests**: 30 library tests (incl. WAL + PITR + replication + pubsub + hyperloglog tests) + 11 API endpoint tests + 46 integration tests
-- **90 Total Tests**: 32 library tests (incl. WAL + PITR + replication + pubsub + hyperloglog + lua tests) + 12 API endpoint tests + 46 integration tests
-- **100% Pass Rate**: All tests passing
-- **Coverage**:
-  - Input validation (empty keys, size limits)
-  - Memory management (eviction, LRU ordering)
-  - Type safety (type mismatch errors)
-  - Atomic operations (incr/decr/append/incrby/getset)
-  - Batch operations (mset/mget)
-  - Transaction support (MULTI/EXEC/DISCARD with operation queueing)
-  - API endpoints (REST/HTTP integration testing)
-  - Stats tracking and accuracy
-  - Persistence (save/load/versioning)
-  - Pub/Sub messaging (subscribe/publish/poll)
-  - HyperLogLog cardinality estimation (pfadd/pfcount/pfmerge)
-  - HyperLogLog cardinality estimation (pfadd/pfcount/pfmerge)
-  - Lua scripting (execute arbitrary scripts against the store)
-
-## Features Status
-
-### Core Operations
-- ✅ **Multiple Data Types**: String, Integer, Float, Boolean, JSON
-- ✅ **TTL Support**: Time-based key expiration
-- ✅ **Persistence**: JSON-based storage with versioned backups
-- ✅ **Atomic Operations**: INCR, DECR, APPEND, GETSET
-- ✅ **Batch Operations**: MGET, MSET, EXISTS
-- ✅ **Pattern Matching**: Glob-style key search (*, ?)
-- ✅ **Statistics**: Hit/miss ratios and operation counters
-- ✅ **Auto-cleanup**: Manual and automatic expired key removal
-- ✅ **Production Ready**: Error handling, validation, logging, graceful shutdown
-
-### Interfaces
-- 🖥️ **CLI Tool**: Full-featured command-line interface
-- 🌐 **REST API**: HTTP server with comprehensive endpoints
-- 📊 **Monitoring**: Real-time statistics and metrics
-
-## Installation
+## Quick start
 
 ```bash
 git clone <repository>
@@ -84,419 +25,137 @@ cd rust-kv-store
 cargo build --release
 ```
 
-## Quick Start
-
-### CLI Usage
+### CLI
 
 ```bash
-# Basic operations
 cargo run -- set mykey myvalue
 cargo run -- get mykey
 cargo run -- delete mykey
 
-# TTL support
+# TTL (seconds)
 cargo run -- set-ttl session "data" --ttl 3600
 
 # Atomic operations
 cargo run -- set counter 10
-cargo run -- incr counter        # Returns: 11
-cargo run -- incrby counter 5    # Returns: 16
-cargo run -- append greeting "Hello"
-cargo run -- append greeting " World"
+cargo run -- incr counter          # 11
+cargo run -- incrby counter 5      # 16
 
-# Batch operations
-cargo run -- mset key1 val1 key2 val2 key3 val3
-cargo run -- mget key1 key2 key3
-cargo run -- exists key1 key2
+# Batch
+cargo run -- mset k1 v1 k2 v2
+cargo run -- mget k1 k2
 
-# Pattern matching
+# Pattern search
 cargo run -- keys "user:*"
-cargo run -- keys "session:?"
 
-# Statistics & maintenance
-cargo run -- stats
-cargo run -- cleanup
-cargo run -- list
+# HyperLogLog
+cargo run -- pf-add visitors u1 u2 u3
+cargo run -- pf-count visitors
+
+# Lua
+cargo run -- lua --script "set('x','hello'); return get('x')"
+
+# Persistence
 cargo run -- save --versions 3
+cargo run -- stats
+```
+
+### HTTP server
+
+```bash
+cargo run --bin server                          # default 127.0.0.1:8080
+KV_BIND=0.0.0.0:3000 cargo run --bin server    # custom bind
 ```
 
 ```bash
-# Lua scripting
-cargo run -- lua --script "set('x', 'hello'); return get('x')"
-cargo run -- lua --script "if exists('x') then return get('x') else return 'missing' end"
-```
-
-### REST API
-
-Start the server:
-```bash
-cargo run --bin server
-# Or set custom bind address
-KV_BIND=0.0.0.0:3000 cargo run --bin server
-```
-
-Example API calls:
-```bash
-# Basic operations
+# Write (with optional TTL)
 curl -X PUT http://localhost:8080/api/keys/mykey \
   -H "Content-Type: application/json" \
-  -d '{"value": "myvalue"}'
+  -d '{"value": "myvalue", "ttl_secs": 3600}'
 
-# Session-style key with TTL (seconds)
-curl -X PUT http://localhost:8080/api/keys/session:abc123 \
-  -H "Content-Type: application/json" \
-  -d '{"value": "user-42", "ttl_secs": 3600}'
-
+# Read
 curl http://localhost:8080/api/keys/mykey
 
-# Atomic operations
+# Atomic increment
 curl -X POST http://localhost:8080/api/incr/counter
-curl -X POST http://localhost:8080/api/incrby/counter \
-  -H "Content-Type: application/json" \
-  -d '{"amount": 5}'
 
-# Batch operations
+# Batch get
 curl -X POST http://localhost:8080/api/mget \
   -H "Content-Type: application/json" \
-  -d '{"keys": ["key1", "key2", "key3"]}'
+  -d '{"keys": ["k1", "k2"]}'
 
-# Statistics
-curl http://localhost:8080/api/stats
-curl http://localhost:8080/api/metrics
-
-# Health checks
+# Health & metrics
 curl http://localhost:8080/api/health/live
 curl http://localhost:8080/api/health/ready
+curl http://localhost:8080/api/metrics
 
-# Pattern matching
+# Pattern search
 curl http://localhost:8080/api/keys/pattern/user:*
 ```
 
-## Operational Controls
+For the full endpoint list and detailed examples, see [FEATURES.md](FEATURES.md).
 
-- `KV_API_KEY`: Optional API key for mutating HTTP endpoints. Send it as `x-api-key: ...` or `Authorization: Bearer ...`.
-- `KV_ENABLE_LUA`: Set to `false` to disable Lua execution over HTTP.
-- `KV_MAX_LUA_SCRIPT_BYTES`: Maximum Lua script payload size for `POST /api/lua/exec` (default `16384`).
-- `KV_BIND`: HTTP bind address (default `127.0.0.1:8080`).
+## Configuration
+
+All settings are via environment variables. Defaults are shown.
+
+| Variable | Default | Description |
+|---|---|---|
+| `KV_BIND` | `127.0.0.1:8080` | HTTP listen address |
+| `KV_STORE_PATH` | `server_store.json` | Data file path (use `.gz`/`.zst` extension for compression) |
+| `KV_WAL_PATH` | `server.wal` | Write-ahead log path |
+| `KV_SNAPSHOTS_DIR` | `snapshots` | Snapshot directory |
+| `KV_SNAPSHOT_INTERVAL_SECS` | `0` (disabled) | Auto-snapshot interval |
+| `KV_SNAPSHOT_COMPRESSION` | `none` | Snapshot compression: `none`, `gzip`, `zstd` |
+| `KV_API_KEY` | _(none)_ | API key for mutating endpoints (`x-api-key` or `Bearer`) |
+| `KV_ENABLE_LUA` | `true` | Enable/disable Lua over HTTP |
+| `KV_MAX_LUA_SCRIPT_BYTES` | `16384` | Max Lua script payload size |
+| `KV_MAX_PAYLOAD_BYTES` | `16777216` (16 MB) | Max request body size |
+| `KV_WORKERS` | _cpu count_ | Actix worker threads |
+| `KV_MAX_CONNECTIONS` | `25000` | Max concurrent connections |
+| `KV_CORS_ORIGIN` | _(none)_ | Allowed CORS origin (omit for permissive) |
+| `KV_NODE_ROLE` | `master` | `master` or `replica` |
+| `KV_MASTER_URL` | _(none)_ | Master URL (replicas only) |
+| `KV_REPLICA_ID` | auto | Replica identifier |
+| `KV_REPLICATION_POLL_INTERVAL` | `5` | Sync poll interval (seconds) |
+| `KV_REPLICATION_SECRET` | _(none)_ | Replication bearer token |
+| `RUST_LOG` | `info` | Log level (tracing) |
 
 ## Docker
 
 ```bash
 docker build -t daikon-kv .
-
 docker run --rm -p 8080:8080 \
   -e KV_BIND=0.0.0.0:8080 \
-  -e KV_API_KEY=demo-secret \
+  -e KV_API_KEY=changeme \
   daikon-kv
 ```
 
-Example authenticated write:
+A production-ready `docker-compose.yml` is included with resource limits, read-only filesystem, and named volumes.
 
-```bash
-curl -X PUT http://localhost:8080/api/keys/demo \
-  -H "x-api-key: demo-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"value": "hello"}'
-```
-
-## Documentation
-
-For detailed feature documentation and examples, see [FEATURES.md](FEATURES.md).
-
-## Architecture
+## Project layout
 
 ```
-rust-kv-store/
-├── src/
-│   ├── kv_store.rs   # Core storage engine with stats tracking
-│   ├── cli.rs        # CLI argument parsing and commands
-│   ├── main.rs       # CLI application entry point
-│   ├── api.rs        # REST API handlers
-│   ├── server.rs     # HTTP server configuration
-│   └── lib.rs        # Library exports
-├── tests/
-│   └── kv_store_test.rs  # Integration tests
-├── FEATURES.md       # Detailed feature documentation
-└── README.md         # This file
+src/
+  kv_store.rs   Core storage engine (HashMap, LRU, stats)
+  api.rs        HTTP handlers
+  server.rs     Server startup, middleware, routes
+  cli.rs        CLI argument parsing
+  main.rs       CLI entry point
+  lib.rs        Library exports
+tests/
+  kv_store_test.rs   Integration tests
+benches/
+  performance.rs     Benchmarks
 ```
 
-## Roadmap
+## Docs
 
-### Phase 1: Production Hardening ✅ COMPLETE
-- ✅ Custom error types and error handling
-- ✅ Input validation (keys, values, config)
-- ✅ Memory management with LRU eviction
-- ✅ Structured logging with tracing
-- ✅ Comprehensive test suite (28 tests total: 23 integration + 5 API tests, 100% passing)
-- ✅ Graceful shutdown with persistence
+- [FEATURES.md](FEATURES.md) — full CLI/API reference with examples
+- [ARCHITECTURE.md](ARCHITECTURE.md) — mermaid diagrams of system and data flow
 
-### Phase 2: Performance & Scalability ✅ COMPLETE
-- [x] **Concurrent Read Optimization**: API and server both use `parking_lot::RwLock`
-- [x] **Batch Write Optimization**: MULTI/EXEC/DISCARD transaction flow for atomic queued writes
-- [x] **Performance Benchmarks**: Throughput and latency metrics
-- [x] **Memory Optimization**: Memory profiling endpoint and detailed usage breakdown by type
-- [x] **Benchmarking CLI**: `benchmark` command to run performance suite
-- [x] **Comprehensive Testing**: 5 new API integration tests for transaction endpoints
+## License
 
-### Phase 3: Persistence & Durability (In Progress)
-- [x] **Write-Ahead Logging**: Transaction log for crash recovery - **FULLY INTEGRATED**
-- [x] **Point-in-Time Recovery**: Restore to specific timestamps - **IMPLEMENTED**
-- [x] **Replication**: Master-replica data synchronization - **BASELINE IMPLEMENTED**
-- [x] **Snapshot Management**: Configurable automatic snapshot intervals - **IMPLEMENTED**
-- [x] **Compression**: Gzip/zstd compression for storage - **IMPLEMENTED**
-
-### Phase 4: Advanced Features (In Progress)
-- [x] **Pub/Sub Messaging**: Event subscription and publishing - **IMPLEMENTED**
-- [ ] **Transactions**: MULTI/EXEC operations with rollback (partial - basic support exists)
-- [ ] **Lua Scripting**: Custom script execution
-- [x] **Lua Scripting**: Custom script execution - **IMPLEMENTED**
-- [ ] **Stream Data Type**: Time-series data support
-- [x] **HyperLogLog**: Cardinality estimation - **IMPLEMENTED**
-
-## Technical Details
-
-### Data Structure
-- **Store**: `HashMap<String, ValueWithTTL>`
-- **Values**: Type-safe enum (String, Int, Float, Bool, JSON)
-- **Stats**: Real-time operation counters and hit/miss tracking
-
-### Persistence
-- JSON serialization with `serde_json`
-- Optional compressed persistence via file extension: `.gz` (gzip) and `.zst` (zstd)
-- Atomic writes (temp file + rename)
-- Versioned backups with automatic pruning
-- Configurable backup retention
-
-**Compression examples:**
-
-```bash
-# CLI / local store files
-# Save or load using gzip by choosing a .gz filename
-cargo run -- --file store.json.gz save --versions 3
-cargo run -- --file store.json.gz load
-
-# Save or load using zstd by choosing a .zst filename
-cargo run -- --file store.json.zst save --versions 3
-cargo run -- --file store.json.zst load
-
-# Server with automatic compressed snapshots
-KV_STORE_PATH=server_store.json.zst \
-KV_SNAPSHOTS_DIR=snapshots \
-KV_SNAPSHOT_INTERVAL_SECS=300 \
-KV_SNAPSHOT_COMPRESSION=gzip \
-cargo run --bin server
-```
-
-#### Write-Ahead Logging (WAL)
-- **Production Ready**: ✅ Fully integrated across all API write endpoints
-- **Durability**: Every write operation is logged to disk before being applied to memory
-- **Crash Recovery**: On startup, the WAL is replayed to restore all committed operations
-- **Format**: JSON-encoded entries for easy inspection and recovery
-- **Operations Logged**: SET, DELETE, INCR, DECR, INCRBY, APPEND, GETSET, MSET
-- **Environment Configuration**: `KV_WAL_PATH` (default: `server.wal`)
-- **API Coverage**: All 8 write endpoints log operations before execution
-
-#### Point-in-Time Recovery (PITR)
-- **Snapshots**: Create on-demand snapshots via `POST /api/pitr/snapshot`
-- **Automatic Snapshots**: Periodic background snapshots via `KV_SNAPSHOT_INTERVAL_SECS`
-- **Snapshot Compression**: `KV_SNAPSHOT_COMPRESSION=none|gzip|zstd` (defaults to `none`)
-- **Recovery Targets**: Recover to a Unix timestamp via `POST /api/pitr/recover/{timestamp}`
-- **Latest Recovery**: Restore latest snapshot via `POST /api/pitr/recover/latest`
-- **Observability**: Recovery stats via `GET /api/pitr/stats`
-- **Retention**: Snapshot cleanup via `POST /api/pitr/cleanup`
-- **Environment Configuration**: `KV_SNAPSHOTS_DIR` (default: `snapshots`), `KV_SNAPSHOT_INTERVAL_SECS` (default: `0`, disabled)
-
-#### Replication
-- **Roles**: Master or replica via `KV_NODE_ROLE` (`master` default)
-- **Master Feed**: Replicas pull WAL entries from `GET /api/replication/wal`
-- **Heartbeat Tracking**: Replica heartbeat at `POST /api/replication/heartbeat`
-- **Replica Sync API**: Manual sync `POST /api/replication/sync`, status `GET /api/replication/status`
-- **Replica Health View**: Master lists replicas at `GET /api/replication/replicas`
-- **Authentication**: Optional bearer-token auth via `KV_REPLICATION_SECRET`
-- **Idempotency**: Replicas deduplicate resent entries using index tracking + timestamp guards
-- **Environment Configuration**: `KV_MASTER_URL`, `KV_REPLICA_ID`, `KV_REPLICATION_POLL_INTERVAL`, `KV_REPLICATION_SECRET`
-
-**Example `GET /api/replication/status` response:**
-
-```json
-{
-  "replica_id": "replica-1",
-  "master_url": "http://localhost:8080",
-  "last_applied_index": 42,
-  "lag_entries": 0,
-  "last_successful_sync_unix_secs": 1741920000,
-  "last_sync_duration_ms": 7
-}
-```
-
-#### Pub/Sub Messaging
-- **Channels**: Dynamic channels created on first subscription
-- **Subscriptions**: Multiple subscribers per channel with unique subscriber IDs
-- **Publishers**: Any client can publish to any channel
-- **Message Queue**: Per-subscriber FIFO message queue (default 1000 messages)
-- **Polling Model**: Subscribers poll for messages at their own pace
-- **Channel Management**: Automatic cleanup of empty channels
-- **API Endpoints**:
-  - `POST /api/pubsub/subscribe/{channel}` → Returns subscriber ID
-  - `POST /api/pubsub/unsubscribe/{channel}/{subscriber_id}` → Remove subscription
-  - `POST /api/pubsub/publish/{channel}` → Broadcast message to all subscribers
-  - `GET /api/pubsub/messages/{subscriber_id}` → Poll messages (default 10, configurable via `?limit=N`)
-  - `GET /api/pubsub/channels` → List all active channels
-  - `GET /api/pubsub/channels/{channel}/subscribers` → List subscribers for a channel
-
-**Publishing and subscribing example:**
-
-```bash
-# Terminal 1: Subscribe to a channel
-SUBSCRIBER=$(curl -s -X POST http://localhost:8080/api/pubsub/subscribe/alerts | jq -r '.subscriber_id')
-echo "Subscriber ID: $SUBSCRIBER"
-
-# Poll for messages (initially empty)
-curl http://localhost:8080/api/pubsub/messages/$SUBSCRIBER?limit=5
-
-# Terminal 2: Publish messages
-curl -X POST http://localhost:8080/api/pubsub/publish/alerts \
-  -H "Content-Type: application/json" \
-  -d '{"message": "System alert!"}'
-
-# Terminal 1: Poll again to receive messages
-curl http://localhost:8080/api/pubsub/messages/$SUBSCRIBER?limit=5
-# Response:
-# {
-#   "messages": [
-#     {
-#       "channel": "alerts",
-#       "message": "System alert!",
-#       "timestamp": 1741920000
-#     }
-#   ]
-# }
-
-# List all active channels
-curl http://localhost:8080/api/pubsub/channels
-
-# List subscribers on a channel
-curl http://localhost:8080/api/pubsub/channels/alerts/subscribers
-```
-
-#### HyperLogLog
-- **Purpose**: Approximate unique counting with fixed memory usage
-- **Use Cases**: Unique visitors, distinct sessions, approximate daily active users
-- **Storage**: Native `HyperLogLog` value type inside the key-value store
-- **CLI Commands**:
-  - `cargo run -- pf-add visitors user1 user2 user3`
-  - `cargo run -- pf-count visitors`
-  - `cargo run -- pf-merge all_visitors visitors_web visitors_mobile`
-- **API Endpoints**:
-  - `POST /api/hll/{key}/reserve` with `{ "precision": 12 }`
-  - `POST /api/hll/{key}/add` with `{ "values": ["user1", "user2"] }`
-  - `GET /api/hll/{key}/count`
-  - `GET /api/hll/{key}/info`
-  - `POST /api/hll/{destination}/merge` with `{ "sources": ["src1", "src2"] }`
-
-**HyperLogLog examples:**
-
-```bash
-# CLI approximate unique counting
-cargo run -- pf-add visitors user1 user2 user3 user2
-cargo run -- pf-count visitors
-
-# Merge two sketches into a destination key
-cargo run -- pf-add visitors_web web_user_1 web_user_2
-cargo run -- pf-add visitors_mobile mobile_user_1 web_user_2
-cargo run -- pf-merge visitors_all visitors_web visitors_mobile
-cargo run -- pf-count visitors_all
-
-# REST API add values
-curl -X POST http://localhost:8080/api/hll/visitors/reserve \
-  -H "Content-Type: application/json" \
-  -d '{"precision": 12}'
-
-curl -X GET http://localhost:8080/api/hll/visitors/info
-
-curl -X POST http://localhost:8080/api/hll/visitors/add \
-  -H "Content-Type: application/json" \
-  -d '{"values": ["user1", "user2", "user3"]}'
-
-# REST API get approximate count
-curl http://localhost:8080/api/hll/visitors/count
-
-# REST API merge sketches
-curl -X POST http://localhost:8080/api/hll/visitors_all/merge \
-  -H "Content-Type: application/json" \
-  -d '{"sources": ["visitors_web", "visitors_mobile"]}'
-```
-
-#### Lua Scripting
-- **Purpose**: Run arbitrary Lua 5.4 scripts against the live store in a single atomic operation
-- **Engine**: Embedded Lua 5.4 via [`mlua`](https://crates.io/crates/mlua) (vendored, no external Lua install required)
-- **WAL Integration**: `set`, `delete`, and `incr` calls from Lua are logged to the WAL when run via the REST API
-- **Safety Controls**: HTTP Lua execution can be disabled with `KV_ENABLE_LUA=false`, enforces request size via `KV_MAX_LUA_SCRIPT_BYTES`, and rejects execution while a transaction is open
-- **Globals exposed to scripts**:
-  - `get(key)` → returns the value as a string, or `nil` if not found
-  - `set(key, value)` → stores a string value; returns `true`
-  - `delete(key)` → removes a key; returns `true` if it existed
-  - `incr(key)` → increments an integer key by 1; returns the new integer value (key must exist as an integer)
-  - `exists(key)` → returns `true`/`false`
-  - `print(msg)` → appends a line to the script output
-- **Output**: Script `return` values and `print()` calls are concatenated and returned as a single string
-- **CLI Command**: `cargo run -- lua --script "set('x', 'hello'); return get('x')"`
-- **API Endpoint**: `POST /api/lua/exec` with `{ "script": "..." }`
-
-**Lua scripting examples:**
-
-```bash
-# CLI: simple set + get
-cargo run -- lua --script "set('name', 'daikon'); return get('name')"
-# Output: daikon
-
-# CLI: increment an integer key (must be pre-seeded as an integer)
-cargo run -- set counter 0
-cargo run -- lua --script "incr('counter'); incr('counter'); return get('counter')"
-# Output: 2
-
-# CLI: conditional logic
-cargo run -- lua --script "
-  if exists('x') then
-    return 'found: ' .. get('x')
-  else
-    set('x', 'init')
-    return 'created'
-  end
-"
-
-# REST API: execute a Lua script
-curl -X POST http://localhost:8080/api/lua/exec \
-  -H "Content-Type: application/json" \
-  -d '{"script": "set(\"greeting\", \"hello\"); return get(\"greeting\")"}'
-# Response: {"output":"hello"}
-
-# REST API: multi-step script with print output
-curl -X POST http://localhost:8080/api/lua/exec \
-  -H "Content-Type: application/json" \
-  -d '{"script": "set(\"a\", \"1\"); set(\"b\", \"2\"); print(\"done\"); return exists(\"a\"), exists(\"b\")"}'
-# Response: {"output":"done\ntrue true"}
-```
-
-### Concurrency
-- `parking_lot::RwLock` for API shared state (read-heavy optimization)
-- `Mutex` still used in server startup path (partial migration)
-- Thread-safe atomic operations
-
-## Statistics Example
-
-```bash
-$ cargo run -- stats
-=== Store Statistics ===
-Total keys: 150
-Expired keys cleaned: 5
-Total reads: 1000
-Total writes: 200
-Total deletes: 50
-Cache hits: 950
-Cache misses: 50
-Hit rate: 95.00%
-```
+MIT
 
 ## Phase 1: Production Readiness ✅
 
