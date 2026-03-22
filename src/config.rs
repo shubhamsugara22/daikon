@@ -155,8 +155,10 @@ mod tests {
 
     #[test]
     fn test_invalid_config() {
-        let mut config = StoreConfig::default();
-        config.max_key_size = 0;
+        let config = StoreConfig {
+            max_key_size: 0,
+            ..StoreConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 }

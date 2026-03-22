@@ -153,8 +153,10 @@ fn test_key_validation_too_large() {
 
 #[test]
 fn test_value_validation_too_large() {
-    let mut config = StoreConfig::default();
-    config.max_value_size = 100; // Set small limit for testing
+    let config = StoreConfig {
+        max_value_size: 100,
+        ..StoreConfig::default()
+    };
     let mut store = KvStore::with_config(config);
 
     let large_value = "a".repeat(200);
@@ -168,10 +170,12 @@ fn test_value_validation_too_large() {
 
 #[test]
 fn test_memory_limit_enforcement() {
-    let mut config = StoreConfig::default();
-    config.max_memory_bytes = 500; // Small limit to trigger evictions
-    config.max_value_size = 500; // Allow individual values up to 500 bytes
-    config.lru_eviction_enabled = true;
+    let config = StoreConfig {
+        max_memory_bytes: 500,
+        max_value_size: 500,
+        lru_eviction_enabled: true,
+        ..StoreConfig::default()
+    };
     let mut store = KvStore::with_config(config);
 
     // Add values that should exceed the 500-byte limit
@@ -198,10 +202,12 @@ fn test_memory_limit_enforcement() {
 
 #[test]
 fn test_lru_order_updates() {
-    let mut config = StoreConfig::default();
-    config.max_memory_bytes = 1000;
-    config.max_value_size = 500;
-    config.lru_eviction_enabled = true;
+    let config = StoreConfig {
+        max_memory_bytes: 1000,
+        max_value_size: 500,
+        lru_eviction_enabled: true,
+        ..StoreConfig::default()
+    };
     let mut store = KvStore::with_config(config);
 
     // Add three keys
@@ -276,8 +282,10 @@ fn test_append_creates_key_if_not_exists() {
 
 #[test]
 fn test_config_validation() {
-    let mut config = StoreConfig::default();
-    config.max_key_size = 0; // Invalid: must be > 0
+    let config = StoreConfig {
+        max_key_size: 0,
+        ..StoreConfig::default()
+    };
 
     let result = config.validate();
     assert!(result.is_err());
@@ -710,7 +718,7 @@ fn test_pubsub_message_fifo_order() {
     for i in 0..5 {
         pubsub
             .publish("channel".to_string(), format!("msg{}", i))
-            .expect(&format!("publish msg{} failed", i));
+            .unwrap_or_else(|e| panic!("publish msg{} failed: {}", i, e));
     }
 
     // Poll and verify FIFO order

@@ -174,6 +174,12 @@ pub struct KvStore {
     transaction_queue: Option<Vec<TransactionOp>>,
 }
 
+impl Default for KvStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KvStore {
     pub fn new() -> Self {
         Self::with_config(StoreConfig::default())
@@ -348,7 +354,7 @@ impl KvStore {
         };
 
         if result.is_ok() {
-            self.update_lru(&key.to_string());
+            self.update_lru(key);
         }
         result
     }
@@ -379,7 +385,7 @@ impl KvStore {
         };
 
         if result.is_ok() {
-            self.update_lru(&key.to_string());
+            self.update_lru(key);
         }
         result
     }
@@ -410,7 +416,7 @@ impl KvStore {
         };
 
         if result.is_ok() {
-            self.update_lru(&key.to_string());
+            self.update_lru(key);
         }
         result
     }
@@ -445,7 +451,7 @@ impl KvStore {
         };
 
         if result.is_ok() {
-            self.update_lru(&key.to_string());
+            self.update_lru(key);
         }
         result
     }
@@ -1098,13 +1104,13 @@ impl KvStore {
                     };
                     self.store.insert(key.clone(), value_with_ttl);
                     self.stats.total_writes += 1;
-                    results.push(format!("OK"));
+                    results.push("OK".to_string());
                     self.update_lru(&key);
                 }
                 TransactionOp::Delete(key) => {
                     self.store.remove(&key);
                     self.stats.total_deletes += 1;
-                    results.push(format!("OK"));
+                    results.push("OK".to_string());
                 }
                 TransactionOp::Incr(key) => {
                     if let Some(entry) = self.store.get_mut(&key) {
@@ -1112,7 +1118,7 @@ impl KvStore {
                             *i += 1;
                             results.push(format!("{}", i));
                         } else {
-                            results.push(format!("ERR: Type mismatch"));
+                            results.push("ERR: Type mismatch".to_string());
                         }
                     } else {
                         self.store.insert(
@@ -1122,7 +1128,7 @@ impl KvStore {
                                 expires_at: None,
                             },
                         );
-                        results.push(format!("1"));
+                        results.push("1".to_string());
                     }
                     self.stats.total_writes += 1;
                     self.update_lru(&key);
@@ -1133,7 +1139,7 @@ impl KvStore {
                             *i -= 1;
                             results.push(format!("{}", i));
                         } else {
-                            results.push(format!("ERR: Type mismatch"));
+                            results.push("ERR: Type mismatch".to_string());
                         }
                     } else {
                         self.store.insert(
@@ -1143,7 +1149,7 @@ impl KvStore {
                                 expires_at: None,
                             },
                         );
-                        results.push(format!("-1"));
+                        results.push("-1".to_string());
                     }
                     self.stats.total_writes += 1;
                     self.update_lru(&key);
@@ -1154,7 +1160,7 @@ impl KvStore {
                             *i += amount;
                             results.push(format!("{}", i));
                         } else {
-                            results.push(format!("ERR: Type mismatch"));
+                            results.push("ERR: Type mismatch".to_string());
                         }
                     } else {
                         self.store.insert(
@@ -1173,9 +1179,9 @@ impl KvStore {
                     if let Some(entry) = self.store.get_mut(&key) {
                         if let Value::Str(ref mut string) = &mut entry.value {
                             string.push_str(&s);
-                            results.push(format!("OK"));
+                            results.push("OK".to_string());
                         } else {
-                            results.push(format!("ERR: Type mismatch"));
+                            results.push("ERR: Type mismatch".to_string());
                         }
                     } else {
                         self.store.insert(
@@ -1185,7 +1191,7 @@ impl KvStore {
                                 expires_at: None,
                             },
                         );
-                        results.push(format!("OK"));
+                        results.push("OK".to_string());
                     }
                     self.stats.total_writes += 1;
                     self.update_lru(&key);

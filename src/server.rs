@@ -184,10 +184,7 @@ async fn main() -> std::io::Result<()> {
         Ok(store) => store,
         Err(e) => {
             error!("Failed to replay WAL: {}", e);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("WAL replay failed: {}", e),
-            ));
+            return Err(std::io::Error::other(format!("WAL replay failed: {}", e)));
         }
     };
 
@@ -483,7 +480,7 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
                 if let Ok(parsed_value) =
                     serde_json::from_str::<rust_kv_store::kv_store::Value>(value)
                 {
-                    let ttl_duration = ttl_secs.map(|secs| std::time::Duration::from_secs(secs));
+                    let ttl_duration = ttl_secs.map(std::time::Duration::from_secs);
                     if let Some(ttl) = ttl_duration {
                         store
                             .set_with_ttl(key.clone(), parsed_value, ttl)

@@ -92,7 +92,7 @@ impl PubSub {
         // Add subscriber to channel's subscriber list if not already subscribed
         channels
             .entry(channel)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(subscriber_id.clone());
 
         // Create subscriber entry if it doesn't exist
@@ -134,7 +134,7 @@ impl PubSub {
         let channels = self.channels.read();
         let subscriber_ids: Vec<String> = channels
             .get(&channel)
-            .map(|subs| subs.clone())
+            .cloned()
             .unwrap_or_default();
 
         drop(channels); // Release read lock before acquiring write lock
@@ -192,7 +192,7 @@ impl PubSub {
         let channels = self.channels.read();
         Ok(channels
             .get(&channel)
-            .map(|subs| subs.clone())
+            .cloned()
             .unwrap_or_default())
     }
 

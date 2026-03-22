@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn test_master_verify_auth_no_token() {
         let temp_dir = tempdir().unwrap();
-        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+        let wal = Arc::new(Wal::new(temp_dir.path().join("wal.log")).unwrap());
         let master = ReplicationMaster::new(wal, 30, None);
 
         // No auth configured → all callers pass
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn test_master_verify_auth_with_token() {
         let temp_dir = tempdir().unwrap();
-        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+        let wal = Arc::new(Wal::new(temp_dir.path().join("wal.log")).unwrap());
         let master = ReplicationMaster::new(wal, 30, Some("supersecret".to_string()));
 
         assert!(master.verify_auth(Some("supersecret")));
@@ -616,7 +616,7 @@ mod tests {
     fn test_replica_apply_wal_entry_set() {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(RwLock::new(KvStore::new()));
-        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+        let wal = Arc::new(Wal::new(temp_dir.path().join("wal.log")).unwrap());
 
         let replica = ReplicationReplica::new(
             "replica-1".to_string(),
@@ -644,7 +644,7 @@ mod tests {
     fn test_replica_dedup_cross_sync_guard() {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(RwLock::new(KvStore::new()));
-        let wal = Arc::new(Wal::new(&temp_dir.path().join("wal.log")).unwrap());
+        let wal = Arc::new(Wal::new(temp_dir.path().join("wal.log")).unwrap());
 
         let replica = ReplicationReplica::new(
             "replica-1".to_string(),

@@ -120,10 +120,7 @@ fn require_api_key(
     req: &HttpRequest,
     runtime: Option<&web::Data<ApiRuntimeConfig>>,
 ) -> Option<HttpResponse> {
-    let expected = runtime.and_then(|cfg| cfg.api_key.as_deref());
-    let Some(expected) = expected else {
-        return None;
-    };
+    let expected = runtime.and_then(|cfg| cfg.api_key.as_deref())?;
 
     let provided = req
         .headers()

@@ -133,24 +133,24 @@ impl Pitr {
             suffix += 1;
         }
 
-        let file = File::create(&snapshot_path).map_err(|e| KvStoreError::IoError(e))?;
+        let file = File::create(&snapshot_path).map_err(KvStoreError::IoError)?;
         match self.snapshot_compression {
             SnapshotCompression::None => {
                 let writer = BufWriter::new(file);
                 serde_json::to_writer_pretty(writer, &store)
-                    .map_err(|e| KvStoreError::SerializationError(e))?;
+                    .map_err(KvStoreError::SerializationError)?;
             }
             SnapshotCompression::Gzip => {
                 let writer = BufWriter::new(file);
                 let encoder = GzEncoder::new(writer, Compression::default());
                 serde_json::to_writer_pretty(encoder, &store)
-                    .map_err(|e| KvStoreError::SerializationError(e))?;
+                    .map_err(KvStoreError::SerializationError)?;
             }
             SnapshotCompression::Zstd => {
                 let writer = BufWriter::new(file);
                 let mut encoder = zstd::Encoder::new(writer, 3).map_err(KvStoreError::IoError)?;
                 serde_json::to_writer_pretty(&mut encoder, &store)
-                    .map_err(|e| KvStoreError::SerializationError(e))?;
+                    .map_err(KvStoreError::SerializationError)?;
                 encoder.finish().map_err(KvStoreError::IoError)?;
             }
         }
@@ -177,8 +177,8 @@ impl Pitr {
     pub fn list_snapshots(&self) -> Result<Vec<SnapshotMetadata>> {
         let mut snapshots = Vec::new();
 
-        for entry in fs::read_dir(&self.snapshots_dir).map_err(|e| KvStoreError::IoError(e))? {
-            let entry = entry.map_err(|e| KvStoreError::IoError(e))?;
+        for entry in fs::read_dir(&self.snapshots_dir).map_err(KvStoreError::IoError)? {
+            let entry = entry.map_err(KvStoreError::IoError)?;
             let path = entry.path();
 
             if path.is_file() {
@@ -213,7 +213,7 @@ impl Pitr {
         let mut store = if let Some(snapshot) = base_snapshot {
             // Load from snapshot
             let snapshot_path = self.snapshots_dir.join(&snapshot.snapshot_file);
-            let file = File::open(&snapshot_path).map_err(|e| KvStoreError::IoError(e))?;
+            let file = File::open(&snapshot_path).map_err(KvStoreError::IoError)?;
             let compression = SnapshotCompression::from_snapshot_filename(&snapshot.snapshot_file)
                 .ok_or_else(|| {
                     KvStoreError::OperationFailed(format!(
@@ -225,20 +225,17 @@ impl Pitr {
             match compression {
                 SnapshotCompression::None => {
                     let reader = BufReader::new(file);
-                    serde_json::from_reader(reader)
-                        .map_err(|e| KvStoreError::SerializationError(e))?
+                    serde_json::from_reader(reader).map_err(KvStoreError::SerializationError)?
                 }
                 SnapshotCompression::Gzip => {
                     let reader = BufReader::new(file);
                     let decoder = GzDecoder::new(reader);
-                    serde_json::from_reader(decoder)
-                        .map_err(|e| KvStoreError::SerializationError(e))?
+                    serde_json::from_reader(decoder).map_err(KvStoreError::SerializationError)?
                 }
                 SnapshotCompression::Zstd => {
                     let reader = BufReader::new(file);
                     let decoder = zstd::Decoder::new(reader).map_err(KvStoreError::IoError)?;
-                    serde_json::from_reader(decoder)
-                        .map_err(|e| KvStoreError::SerializationError(e))?
+                    serde_json::from_reader(decoder).map_err(KvStoreError::SerializationError)?
                 }
             }
         } else {
@@ -293,8 +290,8 @@ impl Pitr {
         let cutoff_time = now.saturating_sub(max_age_secs);
         let mut deleted_count = 0;
 
-        for entry in fs::read_dir(&self.snapshots_dir).map_err(|e| KvStoreError::IoError(e))? {
-            let entry = entry.map_err(|e| KvStoreError::IoError(e))?;
+        for entry in fs::read_dir(&self.snapshots_dir).map_err(KvStoreError::IoError)? {
+            let entry = entry.map_err(KvStoreError::IoError)?;
             let path = entry.path();
 
             if path.is_file() {

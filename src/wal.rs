@@ -88,7 +88,7 @@ impl Wal {
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
 
         let json_line =
-            serde_json::to_string(entry).map_err(|e| KvStoreError::SerializationError(e))?;
+            serde_json::to_string(entry).map_err(KvStoreError::SerializationError)?;
 
         writeln!(file, "{}", json_line).map_err(KvStoreError::IoError)?;
 
