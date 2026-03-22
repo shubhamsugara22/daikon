@@ -44,6 +44,14 @@ pub struct StoreStats {
     pub evictions: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HllInfo {
+    pub precision: u8,
+    pub registers: usize,
+    pub memory_bytes: usize,
+    pub estimated_count: u64,
+}
+
 /// Detailed memory usage breakdown
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryProfile {
@@ -486,6 +494,31 @@ impl KvStore {
     /// Add one or more values to a HyperLogLog under `key`.
     ///
     /// Returns the approximate cardinality after the add.
+    pub fn pfreserve(&mut self, key: String, precision: u8) -> Result<()> {
+        self.validate_key(&key)?;
+
+        if self.store.contains_key(&key) {
+            return Err(KvStoreError::OperationFailed(format!(
+                "Key '{}' already exists",
+                key
+            )));
+        }
+
+        let hll = HyperLogLog::new(precision);
+        self.stats.memory_bytes += self.estimate_value_size(&Value::HyperLogLog(hll.clone()));
+        self.store.insert(
+            key.clone(),
+            ValueWithTTL {
+                value: Value::HyperLogLog(hll),
+                expires_at: None,
+            },
+        );
+        self.stats.total_keys = self.store.len();
+        self.stats.total_writes += 1;
+        self.update_lru(&key);
+        Ok(())
+    }
+
     pub fn pfadd(&mut self, key: String, values: Vec<String>) -> Result<u64> {
         self.validate_key(&key)?;
         if values.is_empty() {
@@ -546,6 +579,29 @@ impl KvStore {
     pub fn pfcount(&self, key: &str) -> Result<u64> {
         match self.get(key) {
             Some(Value::HyperLogLog(hll)) => Ok(hll.count()),
+            Some(other) => {
+                let got = match other {
+                    Value::Str(_) => "Str",
+                    Value::Int(_) => "Int",
+                    Value::Float(_) => "Float",
+                    Value::Bool(_) => "Bool",
+                    Value::Json(_) => "Json",
+                    Value::HyperLogLog(_) => "HyperLogLog",
+                };
+                Err(KvStoreError::type_mismatch(key, "HyperLogLog", got))
+            }
+            None => Err(KvStoreError::KeyNotFound(key.to_string())),
+        }
+    }
+
+    pub fn hll_info(&self, key: &str) -> Result<HllInfo> {
+        match self.get(key) {
+            Some(Value::HyperLogLog(hll)) => Ok(HllInfo {
+                precision: hll.precision(),
+                registers: hll.register_count(),
+                memory_bytes: hll.memory_bytes(),
+                estimated_count: hll.count(),
+            }),
             Some(other) => {
                 let got = match other {
                     Value::Str(_) => "Str",

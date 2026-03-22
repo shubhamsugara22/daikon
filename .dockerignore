@@ -1,0 +1,8 @@
+target
+.git
+.github
+snapshots
+*.wal
+*.json.bak
+server_store.json
+store.json

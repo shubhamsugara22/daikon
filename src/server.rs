@@ -4,7 +4,10 @@ use rust_kv_store::pitr::Pitr;
 use rust_kv_store::pubsub::PubSub;
 use rust_kv_store::replication::{ReplicationMaster, ReplicationReplica, ReplicationRole};
 use rust_kv_store::wal::{Wal, WalOperation};
-use rust_kv_store::{api, kv_store::KvStore};
+use rust_kv_store::{
+    api::{self, ApiRuntimeConfig},
+    kv_store::KvStore,
+};
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,6 +36,22 @@ async fn main() -> std::io::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let api_key = env::var("KV_API_KEY")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let lua_enabled = env::var("KV_ENABLE_LUA")
+        .ok()
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no"
+            )
+        })
+        .unwrap_or(true);
+    let max_lua_script_bytes: usize = env::var("KV_MAX_LUA_SCRIPT_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(16 * 1024);
 
     // Replication configuration
     let node_role = env::var("KV_NODE_ROLE")
@@ -57,6 +76,15 @@ async fn main() -> std::io::Result<()> {
     } else {
         info!("Replication auth is DISABLED (set KV_REPLICATION_SECRET to enable)");
     }
+    if api_key.is_some() {
+        info!("API key auth is ENABLED (KV_API_KEY is set)");
+    } else {
+        info!("API key auth is DISABLED (set KV_API_KEY to enable)");
+    }
+    info!(
+        "Lua runtime: enabled={}, max_script_bytes={}",
+        lua_enabled, max_lua_script_bytes
+    );
 
     info!("Node role: {:?}", replication_role);
     if replication_role == ReplicationRole::Replica {
@@ -222,13 +250,19 @@ async fn main() -> std::io::Result<()> {
     let replication_master_for_server = replication_master.clone();
     let replication_replica_for_server = replication_replica_instance.clone();
     let pubsub_for_server = Arc::clone(&pubsub);
+    let api_runtime_config = ApiRuntimeConfig {
+        api_key,
+        lua_enabled,
+        max_lua_script_bytes,
+    };
 
     let server = HttpServer::new(move || {
         let mut app = App::new()
             .app_data(web::Data::from(Arc::clone(&store)))
             .app_data(web::Data::from(Arc::clone(&wal)))
             .app_data(web::Data::from(Arc::clone(&pitr)))
-            .app_data(web::Data::from(Arc::clone(&pubsub_for_server)));
+            .app_data(web::Data::from(Arc::clone(&pubsub_for_server)))
+            .app_data(web::Data::new(api_runtime_config.clone()));
 
         // Add replication master data if in master mode
         if let Some(ref master) = replication_master_for_server {
@@ -242,6 +276,10 @@ async fn main() -> std::io::Result<()> {
 
         app.service(
             web::scope("/api")
+                // Health / metrics
+                .route("/health/live", web::get().to(api::health_live))
+                .route("/health/ready", web::get().to(api::health_ready))
+                .route("/metrics", web::get().to(api::metrics))
                 // Basic operations
                 .route("/keys", web::get().to(api::list_keys))
                 .route("/keys/{key}", web::get().to(api::get_value))
@@ -321,8 +359,10 @@ async fn main() -> std::io::Result<()> {
                     web::get().to(api::pubsub_list_subscribers),
                 )
                 // HyperLogLog operations
+                .route("/hll/{key}/reserve", web::post().to(api::hll_pfreserve))
                 .route("/hll/{key}/add", web::post().to(api::hll_pfadd))
                 .route("/hll/{key}/count", web::get().to(api::hll_pfcount))
+                .route("/hll/{key}/info", web::get().to(api::hll_info))
                 .route("/hll/{destination}/merge", web::post().to(api::hll_pfmerge))
                 // Lua scripting
                 .route("/lua/exec", web::post().to(api::lua_exec)),

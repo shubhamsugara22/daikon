@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{http::header, web, HttpRequest, HttpResponse, Responder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
@@ -16,9 +16,17 @@ pub type WebReplicationMaster = web::Data<ReplicationMaster>;
 pub type WebReplicationReplica = web::Data<ReplicationReplica>;
 pub type WebPubSub = web::Data<PubSub>;
 
+#[derive(Debug, Clone)]
+pub struct ApiRuntimeConfig {
+    pub api_key: Option<String>,
+    pub lua_enabled: bool,
+    pub max_lua_script_bytes: usize,
+}
+
 #[derive(Deserialize)]
 pub struct SetRequest {
     value: String,
+    ttl_secs: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +78,12 @@ pub struct StatsResponse {
     hit_rate: f64,
 }
 
+#[derive(Serialize)]
+pub struct HealthResponse {
+    status: &'static str,
+    lua_enabled: bool,
+}
+
 #[derive(Deserialize)]
 pub struct PublishRequest {
     pub message: String,
@@ -102,6 +116,46 @@ pub struct SubscribersResponse {
     pub subscribers: Vec<String>,
 }
 
+fn require_api_key(
+    req: &HttpRequest,
+    runtime: Option<&web::Data<ApiRuntimeConfig>>,
+) -> Option<HttpResponse> {
+    let expected = runtime.and_then(|cfg| cfg.api_key.as_deref());
+    let Some(expected) = expected else {
+        return None;
+    };
+
+    let provided = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| {
+            req.headers()
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+        });
+
+    match provided {
+        Some(actual) if actual == expected => None,
+        _ => Some(HttpResponse::Unauthorized().body("Missing or invalid API key")),
+    }
+}
+
+pub async fn health_live(runtime: Option<web::Data<ApiRuntimeConfig>>) -> impl Responder {
+    HttpResponse::Ok().json(HealthResponse {
+        status: "ok",
+        lua_enabled: runtime.as_ref().map(|cfg| cfg.lua_enabled).unwrap_or(true),
+    })
+}
+
+pub async fn health_ready(runtime: Option<web::Data<ApiRuntimeConfig>>) -> impl Responder {
+    HttpResponse::Ok().json(HealthResponse {
+        status: "ready",
+        lua_enabled: runtime.as_ref().map(|cfg| cfg.lua_enabled).unwrap_or(true),
+    })
+}
+
 // GET /api/keys/{key}
 pub async fn get_value(store: WebKvStore, key: web::Path<String>) -> impl Responder {
     let store = store.read(); // Read lock - allows concurrent reads
@@ -113,11 +167,20 @@ pub async fn get_value(store: WebKvStore, key: web::Path<String>) -> impl Respon
 
 // PUT /api/keys/{key}
 pub async fn set_value(
+    http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
     req: web::Json<SetRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+    if matches!(req.ttl_secs, Some(0)) {
+        return HttpResponse::BadRequest().body("ttl_secs must be greater than 0 when provided");
+    }
+
     // Convert string to Value and serialize it for WAL
     let value: crate::kv_store::Value = req.value.clone().into();
     let value_json = match serde_json::to_string(&value) {
@@ -132,7 +195,7 @@ pub async fn set_value(
     let entry = WalEntry::new(WalOperation::Set {
         key: key.to_string(),
         value: value_json,
-        ttl_secs: None,
+        ttl_secs: req.ttl_secs,
     });
     if let Err(e) = wal.append(&entry) {
         return HttpResponse::InternalServerError()
@@ -140,7 +203,17 @@ pub async fn set_value(
     }
 
     let mut store = store.write(); // Write lock - exclusive access for mutation
-    match store.set(key.to_string(), req.value.clone()) {
+    let result = if let Some(ttl_secs) = req.ttl_secs {
+        store.set_with_ttl(
+            key.to_string(),
+            req.value.clone(),
+            std::time::Duration::from_secs(ttl_secs),
+        )
+    } else {
+        store.set(key.to_string(), req.value.clone())
+    };
+
+    match result {
         Ok(_) => HttpResponse::Ok().body(format!("Set '{}' successfully", key)),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
@@ -148,10 +221,16 @@ pub async fn set_value(
 
 // DELETE /api/keys/{key}
 pub async fn delete_value(
+    http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     // Log to WAL first
     let entry = WalEntry::new(WalOperation::Delete {
         key: key.to_string(),
@@ -183,7 +262,17 @@ pub async fn list_keys(store: WebKvStore) -> impl Responder {
 }
 
 // POST /api/incr/{key}
-pub async fn incr_value(store: WebKvStore, wal: WebWal, key: web::Path<String>) -> impl Responder {
+pub async fn incr_value(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    key: web::Path<String>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     // Log to WAL first
     let entry = WalEntry::new(WalOperation::Incr {
         key: key.to_string(),
@@ -201,7 +290,17 @@ pub async fn incr_value(store: WebKvStore, wal: WebWal, key: web::Path<String>) 
 }
 
 // POST /api/decr/{key}
-pub async fn decr_value(store: WebKvStore, wal: WebWal, key: web::Path<String>) -> impl Responder {
+pub async fn decr_value(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    key: web::Path<String>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     // Log to WAL first
     let entry = WalEntry::new(WalOperation::Decr {
         key: key.to_string(),
@@ -220,11 +319,17 @@ pub async fn decr_value(store: WebKvStore, wal: WebWal, key: web::Path<String>) 
 
 // POST /api/incrby/{key}
 pub async fn incrby_value(
+    http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
     req: web::Json<IncrByRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     // Log to WAL first
     let entry = WalEntry::new(WalOperation::IncrBy {
         key: key.to_string(),
@@ -244,11 +349,17 @@ pub async fn incrby_value(
 
 // POST /api/append/{key}
 pub async fn append_value(
+    http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
     req: web::Json<AppendRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     // Log to WAL first
     let entry = WalEntry::new(WalOperation::Append {
         key: key.to_string(),
@@ -268,11 +379,17 @@ pub async fn append_value(
 
 // POST /api/getset/{key}
 pub async fn getset_value(
+    http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
     req: web::Json<SetRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     // Log to WAL first
     let entry = WalEntry::new(WalOperation::GetSet {
         key: key.to_string(),
@@ -304,10 +421,16 @@ pub async fn mget_values(store: WebKvStore, req: web::Json<MGetRequest>) -> impl
 
 // POST /api/mset
 pub async fn mset_values(
+    http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     req: web::Json<MSetRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     // Log to WAL first
     let pairs_vec: Vec<(String, String)> = req
         .pairs
@@ -366,13 +489,29 @@ pub async fn get_stats(store: WebKvStore) -> impl Responder {
 }
 
 // POST /api/cleanup
-pub async fn cleanup_expired(store: WebKvStore) -> impl Responder {
+pub async fn cleanup_expired(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let mut store = store.write(); // Write lock
     let removed = store.cleanup_expired();
     HttpResponse::Ok().json(removed)
 }
 // POST /api/multi
-pub async fn multi(store: WebKvStore) -> impl Responder {
+pub async fn multi(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let mut store = store.write(); // Write lock
     match store.multi() {
         Ok(_) => HttpResponse::Ok()
@@ -382,7 +521,15 @@ pub async fn multi(store: WebKvStore) -> impl Responder {
 }
 
 // POST /api/exec
-pub async fn exec(store: WebKvStore) -> impl Responder {
+pub async fn exec(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let mut store = store.write(); // Write lock
     match store.exec() {
         Ok(results) => HttpResponse::Ok().json(serde_json::json!({"results": results})),
@@ -391,7 +538,15 @@ pub async fn exec(store: WebKvStore) -> impl Responder {
 }
 
 // POST /api/discard
-pub async fn discard(store: WebKvStore) -> impl Responder {
+pub async fn discard(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let mut store = store.write(); // Write lock
     match store.discard() {
         Ok(_) => HttpResponse::Ok()
@@ -407,8 +562,58 @@ pub async fn get_memory_profile(store: WebKvStore) -> impl Responder {
     HttpResponse::Ok().json(profile)
 }
 
+pub async fn metrics(store: WebKvStore) -> impl Responder {
+    let store = store.read();
+    let stats = store.stats();
+    let profile = store.memory_profile();
+    let hit_rate = if stats.total_reads > 0 {
+        stats.hits as f64 / stats.total_reads as f64
+    } else {
+        0.0
+    };
+
+    let body = format!(
+        concat!(
+            "kv_total_keys {}\n",
+            "kv_total_reads {}\n",
+            "kv_total_writes {}\n",
+            "kv_total_deletes {}\n",
+            "kv_cache_hits {}\n",
+            "kv_cache_misses {}\n",
+            "kv_hit_rate {}\n",
+            "kv_memory_bytes {}\n",
+            "kv_evictions {}\n"
+        ),
+        stats.total_keys,
+        stats.total_reads,
+        stats.total_writes,
+        stats.total_deletes,
+        stats.hits,
+        stats.misses,
+        hit_rate,
+        profile.total_bytes,
+        stats.evictions,
+    );
+
+    HttpResponse::Ok()
+        .insert_header((
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        ))
+        .body(body)
+}
+
 // POST /api/pitr/snapshot
-pub async fn pitr_create_snapshot(store: WebKvStore, pitr: WebPitr) -> impl Responder {
+pub async fn pitr_create_snapshot(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    pitr: WebPitr,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let store = store.read();
     match pitr.create_snapshot(&store) {
         Ok(metadata) => HttpResponse::Ok().json(metadata),
@@ -426,10 +631,16 @@ pub async fn pitr_list_snapshots(pitr: WebPitr) -> impl Responder {
 
 // POST /api/pitr/recover/{timestamp}
 pub async fn pitr_recover_to_timestamp(
+    http_req: HttpRequest,
     store: WebKvStore,
     pitr: WebPitr,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     timestamp: web::Path<u64>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let target = timestamp.into_inner();
     match pitr.recover_to_timestamp(target) {
         Ok(recovered_store) => {
@@ -448,7 +659,16 @@ pub async fn pitr_recover_to_timestamp(
 }
 
 // POST /api/pitr/recover/latest
-pub async fn pitr_recover_latest_snapshot(store: WebKvStore, pitr: WebPitr) -> impl Responder {
+pub async fn pitr_recover_latest_snapshot(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    pitr: WebPitr,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     match pitr.recover_to_latest_snapshot() {
         Ok(recovered_store) => {
             let mut store_guard = store.write();
@@ -475,9 +695,15 @@ pub async fn pitr_stats(pitr: WebPitr) -> impl Responder {
 
 // POST /api/pitr/cleanup
 pub async fn pitr_cleanup_old_snapshots(
+    http_req: HttpRequest,
     pitr: WebPitr,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     req: web::Json<CleanupSnapshotsRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     match pitr.cleanup_old_snapshots(req.max_age_secs) {
         Ok(deleted) => HttpResponse::Ok().json(serde_json::json!({
             "status": "OK",
@@ -603,7 +829,16 @@ pub async fn replication_status(replica: WebReplicationReplica) -> impl Responde
 
 // POST /api/pubsub/subscribe/{channel}
 // Subscribe to a channel
-pub async fn pubsub_subscribe(pubsub: WebPubSub, channel: web::Path<String>) -> impl Responder {
+pub async fn pubsub_subscribe(
+    http_req: HttpRequest,
+    pubsub: WebPubSub,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    channel: web::Path<String>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let subscriber_id = PubSub::new_subscriber_id();
 
     match pubsub.subscribe(channel.to_string(), subscriber_id.clone()) {
@@ -615,9 +850,15 @@ pub async fn pubsub_subscribe(pubsub: WebPubSub, channel: web::Path<String>) -> 
 // POST /api/pubsub/unsubscribe/{channel}/{subscriber_id}
 // Unsubscribe from a channel
 pub async fn pubsub_unsubscribe(
+    http_req: HttpRequest,
     pubsub: WebPubSub,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     path: web::Path<(String, String)>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let (channel, subscriber_id) = path.into_inner();
 
     match pubsub.unsubscribe(channel, subscriber_id) {
@@ -631,10 +872,16 @@ pub async fn pubsub_unsubscribe(
 // POST /api/pubsub/publish/{channel}
 // Publish a message to a channel
 pub async fn pubsub_publish(
+    http_req: HttpRequest,
     pubsub: WebPubSub,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     channel: web::Path<String>,
     req: web::Json<PublishRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     match pubsub.publish(channel.to_string(), req.message.clone()) {
         Ok(subscribers_count) => HttpResponse::Ok().json(PublishResponse {
             channel: channel.to_string(),
@@ -698,10 +945,24 @@ pub struct PfMergeRequest {
     pub sources: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub struct PfReserveRequest {
+    pub precision: u8,
+}
+
 #[derive(Serialize)]
 pub struct HllCountResponse {
     pub key: String,
     pub count: u64,
+}
+
+#[derive(Serialize)]
+pub struct HllInfoResponse {
+    pub key: String,
+    pub precision: u8,
+    pub registers: usize,
+    pub memory_bytes: usize,
+    pub estimated_count: u64,
 }
 
 #[derive(Deserialize)]
@@ -717,16 +978,44 @@ pub struct LuaExecResponse {
 // POST /api/hll/{key}/add
 // Add values to a HyperLogLog key; returns the new estimated cardinality.
 pub async fn hll_pfadd(
+    http_req: HttpRequest,
     store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
     req: web::Json<PfAddRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let mut store = store.write();
     match store.pfadd(key.to_string(), req.values.clone()) {
         Ok(count) => HttpResponse::Ok().json(HllCountResponse {
             key: key.to_string(),
             count,
         }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hll_pfreserve(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    key: web::Path<String>,
+    req: web::Json<PfReserveRequest>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
+    let mut store = store.write();
+    match store.pfreserve(key.to_string(), req.precision) {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "key": key.to_string(),
+            "precision": req.precision,
+            "status": "reserved"
+        })),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -744,13 +1033,33 @@ pub async fn hll_pfcount(store: WebKvStore, key: web::Path<String>) -> impl Resp
     }
 }
 
+pub async fn hll_info(store: WebKvStore, key: web::Path<String>) -> impl Responder {
+    let store = store.read();
+    match store.hll_info(&key) {
+        Ok(info) => HttpResponse::Ok().json(HllInfoResponse {
+            key: key.to_string(),
+            precision: info.precision,
+            registers: info.registers,
+            memory_bytes: info.memory_bytes,
+            estimated_count: info.estimated_count,
+        }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
 // POST /api/hll/{destination}/merge
 // Merge one or more source HLL keys into the destination key.
 pub async fn hll_pfmerge(
+    http_req: HttpRequest,
     store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     destination: web::Path<String>,
     req: web::Json<PfMergeRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
     let mut store = store.write();
     match store.pfmerge(destination.to_string(), &req.sources) {
         Ok(count) => HttpResponse::Ok().json(HllCountResponse {
@@ -764,11 +1073,34 @@ pub async fn hll_pfmerge(
 // POST /api/lua/exec
 // Execute a Lua script against the store with built-in helpers.
 pub async fn lua_exec(
+    http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
     req: web::Json<LuaExecRequest>,
 ) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
+    if let Some(cfg) = runtime.as_ref() {
+        if !cfg.lua_enabled {
+            return HttpResponse::Forbidden().body("Lua execution is disabled");
+        }
+        if req.script.len() > cfg.max_lua_script_bytes {
+            return HttpResponse::PayloadTooLarge().body(format!(
+                "Lua script exceeds max size of {} bytes",
+                cfg.max_lua_script_bytes
+            ));
+        }
+    }
+
     let mut store = store.write();
+    if store.in_transaction() {
+        return HttpResponse::Conflict()
+            .body("Cannot execute Lua while a transaction is in progress");
+    }
+
     match lua::execute_script(&mut store, Some(&wal), &req.script) {
         Ok(output) => HttpResponse::Ok().json(LuaExecResponse { output }),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),

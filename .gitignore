@@ -6,3 +6,5 @@ server_store.json
 store.json
 server.wal
 snapshots/
+target/
+.github/
