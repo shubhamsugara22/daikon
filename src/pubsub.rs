@@ -132,10 +132,7 @@ impl PubSub {
         let msg = PubSubMessage::new(channel.clone(), message);
 
         let channels = self.channels.read();
-        let subscriber_ids: Vec<String> = channels
-            .get(&channel)
-            .cloned()
-            .unwrap_or_default();
+        let subscriber_ids: Vec<String> = channels.get(&channel).cloned().unwrap_or_default();
 
         drop(channels); // Release read lock before acquiring write lock
 
@@ -190,10 +187,7 @@ impl PubSub {
     /// Get list of subscribers for a channel
     pub fn list_subscribers(&self, channel: String) -> Result<Vec<String>, KvStoreError> {
         let channels = self.channels.read();
-        Ok(channels
-            .get(&channel)
-            .cloned()
-            .unwrap_or_default())
+        Ok(channels.get(&channel).cloned().unwrap_or_default())
     }
 
     /// Get pending message count for a subscriber
