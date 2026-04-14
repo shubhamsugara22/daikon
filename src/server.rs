@@ -430,13 +430,6 @@ async fn main() -> std::io::Result<()> {
                 .route("/list/{key}/rpop", web::post().to(api::list_rpop))
                 .route("/list/{key}/lrange", web::get().to(api::list_lrange))
                 .route("/list/{key}/llen", web::get().to(api::list_llen)),
-                // List operations
-                .route("/list/{key}/lpush", web::post().to(api::list_lpush))
-                .route("/list/{key}/rpush", web::post().to(api::list_rpush))
-                .route("/list/{key}/lpop", web::post().to(api::list_lpop))
-                .route("/list/{key}/rpop", web::post().to(api::list_rpop))
-                .route("/list/{key}/lrange", web::get().to(api::list_lrange))
-                .route("/list/{key}/llen", web::get().to(api::list_llen)),
         )
     })
     .max_connections(max_connections);

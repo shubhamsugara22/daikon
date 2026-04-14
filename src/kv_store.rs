@@ -1203,7 +1203,7 @@ impl KvStore {
         let len = match self.store.get_mut(key) {
             Some(entry) => {
                 if let Value::List(ref mut list) = entry.value {
-                    for v in values.into_iter().rev() {
+                    for v in values.into_iter() {
                         list.insert(0, v);
                     }
                     self.stats.total_writes += 1;
@@ -1218,7 +1218,7 @@ impl KvStore {
             }
             None => {
                 let mut list: Vec<String> = Vec::new();
-                for v in values.into_iter().rev() {
+                for v in values.into_iter() {
                     list.insert(0, v);
                 }
                 let len = list.len();

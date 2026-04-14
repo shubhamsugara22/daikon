@@ -1149,7 +1149,7 @@ pub async fn list_lpush(
     path: web::Path<String>,
     body: web::Json<ListPushRequest>,
 ) -> impl Responder {
-    if let Some(resp) = require_api_key(&req, &config) {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
         return resp;
     }
     let key = path.into_inner();
@@ -1178,7 +1178,7 @@ pub async fn list_rpush(
     path: web::Path<String>,
     body: web::Json<ListPushRequest>,
 ) -> impl Responder {
-    if let Some(resp) = require_api_key(&req, &config) {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
         return resp;
     }
     let key = path.into_inner();
@@ -1206,7 +1206,7 @@ pub async fn list_lpop(
     config: Option<web::Data<ApiRuntimeConfig>>,
     path: web::Path<String>,
 ) -> impl Responder {
-    if let Some(resp) = require_api_key(&req, &config) {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
         return resp;
     }
     let key = path.into_inner();
@@ -1230,7 +1230,7 @@ pub async fn list_rpop(
     config: Option<web::Data<ApiRuntimeConfig>>,
     path: web::Path<String>,
 ) -> impl Responder {
-    if let Some(resp) = require_api_key(&req, &config) {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
         return resp;
     }
     let key = path.into_inner();
@@ -1254,7 +1254,7 @@ pub async fn list_lrange(
     path: web::Path<String>,
     query: web::Query<LRangeQuery>,
 ) -> impl Responder {
-    if let Some(resp) = require_api_key(&req, &config) {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
         return resp;
     }
     let key = path.into_inner();
@@ -1274,7 +1274,7 @@ pub async fn list_llen(
     config: Option<web::Data<ApiRuntimeConfig>>,
     path: web::Path<String>,
 ) -> impl Responder {
-    if let Some(resp) = require_api_key(&req, &config) {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
         return resp;
     }
     let key = path.into_inner();

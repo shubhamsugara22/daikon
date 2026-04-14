@@ -356,6 +356,18 @@ impl Pitr {
             } => {
                 let _ = store.pfmerge(destination, &sources);
             }
+            WalOperation::LPush { key, values } => {
+                let _ = store.lpush(&key, values);
+            }
+            WalOperation::RPush { key, values } => {
+                let _ = store.rpush(&key, values);
+            }
+            WalOperation::LPop { key } => {
+                let _ = store.lpop(&key);
+            }
+            WalOperation::RPop { key } => {
+                let _ = store.rpop(&key);
+            }
         }
         Ok(())
     }

@@ -470,6 +470,18 @@ impl ReplicationReplica {
             } => {
                 let _ = store.pfmerge(destination.clone(), sources);
             }
+            WalOperation::LPush { key, values } => {
+                let _ = store.lpush(key, values.clone());
+            }
+            WalOperation::RPush { key, values } => {
+                let _ = store.rpush(key, values.clone());
+            }
+            WalOperation::LPop { key } => {
+                let _ = store.lpop(key);
+            }
+            WalOperation::RPop { key } => {
+                let _ = store.rpop(key);
+            }
         }
 
         // Also append to local WAL for persistence

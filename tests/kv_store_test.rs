@@ -815,3 +815,140 @@ fn test_hll_type_mismatch_on_string_key() {
         "pfcount on a String key should return TypeMismatch"
     );
 }
+
+// ── List data type tests ──
+
+#[test]
+fn test_lpush_creates_list_and_returns_length() {
+    let mut store = KvStore::new();
+    let len = store
+        .lpush("mylist", vec!["a".into(), "b".into(), "c".into()])
+        .unwrap();
+    assert_eq!(len, 3);
+    // LPUSH reverses order like Redis: c, b, a
+    let items = store.lrange("mylist", 0, -1).unwrap();
+    assert_eq!(items, vec!["c", "b", "a"]);
+}
+
+#[test]
+fn test_rpush_creates_list_and_returns_length() {
+    let mut store = KvStore::new();
+    let len = store
+        .rpush("mylist", vec!["a".into(), "b".into(), "c".into()])
+        .unwrap();
+    assert_eq!(len, 3);
+    let items = store.lrange("mylist", 0, -1).unwrap();
+    assert_eq!(items, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn test_lpush_rpush_combined() {
+    let mut store = KvStore::new();
+    store.rpush("mylist", vec!["a".into()]).unwrap();
+    store.lpush("mylist", vec!["b".into()]).unwrap();
+    store.rpush("mylist", vec!["c".into()]).unwrap();
+    let items = store.lrange("mylist", 0, -1).unwrap();
+    assert_eq!(items, vec!["b", "a", "c"]);
+}
+
+#[test]
+fn test_lpop_rpop() {
+    let mut store = KvStore::new();
+    store
+        .rpush("mylist", vec!["a".into(), "b".into(), "c".into()])
+        .unwrap();
+
+    assert_eq!(store.lpop("mylist").unwrap(), Some("a".into()));
+    assert_eq!(store.rpop("mylist").unwrap(), Some("c".into()));
+    assert_eq!(store.llen("mylist").unwrap(), 1);
+    assert_eq!(store.lpop("mylist").unwrap(), Some("b".into()));
+    // Empty list
+    assert_eq!(store.lpop("mylist").unwrap(), None);
+    assert_eq!(store.rpop("mylist").unwrap(), None);
+}
+
+#[test]
+fn test_lpop_rpop_missing_key() {
+    let mut store = KvStore::new();
+    assert_eq!(store.lpop("nokey").unwrap(), None);
+    assert_eq!(store.rpop("nokey").unwrap(), None);
+}
+
+#[test]
+fn test_lrange_with_negative_indices() {
+    let mut store = KvStore::new();
+    store
+        .rpush(
+            "mylist",
+            vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        )
+        .unwrap();
+    // Last two elements
+    assert_eq!(store.lrange("mylist", -2, -1).unwrap(), vec!["c", "d"]);
+    // All elements via negative
+    assert_eq!(
+        store.lrange("mylist", -4, -1).unwrap(),
+        vec!["a", "b", "c", "d"]
+    );
+}
+
+#[test]
+fn test_lrange_out_of_bounds() {
+    let mut store = KvStore::new();
+    store.rpush("mylist", vec!["a".into(), "b".into()]).unwrap();
+    // Overshoot end → clamped
+    let items = store.lrange("mylist", 0, 100).unwrap();
+    assert_eq!(items, vec!["a", "b"]);
+    // start > stop → empty
+    let items = store.lrange("mylist", 5, 1).unwrap();
+    assert!(items.is_empty());
+}
+
+#[test]
+fn test_lrange_missing_key() {
+    let store = KvStore::new();
+    let items = store.lrange("nokey", 0, -1).unwrap();
+    assert!(items.is_empty());
+}
+
+#[test]
+fn test_llen() {
+    let mut store = KvStore::new();
+    assert_eq!(store.llen("mylist").unwrap(), 0);
+    store.rpush("mylist", vec!["a".into(), "b".into()]).unwrap();
+    assert_eq!(store.llen("mylist").unwrap(), 2);
+    store.lpop("mylist").unwrap();
+    assert_eq!(store.llen("mylist").unwrap(), 1);
+}
+
+#[test]
+fn test_list_type_mismatch_on_string_key() {
+    let mut store = KvStore::new();
+    store
+        .set("strkey".to_string(), "hello".to_string())
+        .unwrap();
+    assert!(matches!(
+        store.lpush("strkey", vec!["a".into()]),
+        Err(KvStoreError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        store.rpush("strkey", vec!["a".into()]),
+        Err(KvStoreError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        store.lpop("strkey"),
+        Err(KvStoreError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        store.rpop("strkey"),
+        Err(KvStoreError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        store.lrange("strkey", 0, -1),
+        Err(KvStoreError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        store.llen("strkey"),
+        Err(KvStoreError::TypeMismatch { .. })
+    ));
+}
