@@ -6,7 +6,7 @@ A simple guide to understanding the internals and integrating Daikon into your a
 
 ## How it works
 
-```
+```text
 ┌──────────────────────────────────────────────────┐
 │                   Client App                     │
 │        (any language — HTTP requests)            │
@@ -287,7 +287,7 @@ Read endpoints (GET) are open. This lets you use Daikon as a shared cache where 
 ## Common use cases
 
 | Use case | How |
-|---|---|
+| --- | --- |
 | **Session store** | SET with TTL → auto-expires stale sessions |
 | **Rate limiter** | INCR a counter key per IP, check threshold |
 | **Feature flags** | SET `flag:dark-mode` → `true`, GET from your app |
@@ -301,7 +301,7 @@ Read endpoints (GET) are open. This lets you use Daikon as a shared cache where 
 ## Full API reference
 
 | Method | Endpoint | Description |
-|---|---|---|
+| --- | --- | --- |
 | GET | `/api/health/live` | Liveness probe |
 | GET | `/api/health/ready` | Readiness probe |
 | GET | `/api/metrics` | Prometheus metrics |

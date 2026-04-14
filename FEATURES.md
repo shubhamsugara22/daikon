@@ -3,6 +3,7 @@
 ## ✅ Atomic Operations
 
 ### INCR/DECR
+
 Increment or decrement integer values atomically.
 
 **CLI:**
@@ -27,6 +28,7 @@ curl -X POST http://localhost:8080/api/decr/counter
 ```
 
 ### INCRBY
+
 Increment by a specific amount.
 
 **CLI:**
@@ -42,6 +44,7 @@ curl -X POST http://localhost:8080/api/incrby/counter \
 ```
 
 ### APPEND
+
 Append text to a string value.
 
 **CLI:**
@@ -58,6 +61,7 @@ curl -X POST http://localhost:8080/api/append/message \
 ```
 
 ### GETSET
+
 Get old value and set new value atomically.
 
 **CLI:**
@@ -76,6 +80,7 @@ curl -X POST http://localhost:8080/api/getset/key \
 ## ✅ Batch Operations
 
 ### MGET
+
 Get multiple values at once.
 
 **CLI:**
@@ -91,6 +96,7 @@ curl -X POST http://localhost:8080/api/mget \
 ```
 
 ### MSET
+
 Set multiple key-value pairs at once.
 
 **CLI:**
@@ -111,6 +117,7 @@ curl -X POST http://localhost:8080/api/mset \
 ```
 
 ### EXISTS
+
 Check if keys exist.
 
 **CLI:**
@@ -128,6 +135,7 @@ curl http://localhost:8080/api/exists/key1
 ## ✅ Pattern Matching
 
 ### KEYS
+
 Find keys matching a glob pattern.
 
 **CLI:**
@@ -157,6 +165,7 @@ curl http://localhost:8080/api/keys/pattern/user:*
 ## ✅ Statistics & Monitoring
 
 ### STATS
+
 View store statistics including hit/miss ratios.
 
 **CLI:**
@@ -197,6 +206,7 @@ curl http://localhost:8080/api/stats
 ```
 
 ### CLEANUP
+
 Manually clean up expired keys.
 
 **CLI:**

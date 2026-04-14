@@ -99,7 +99,7 @@ For the full endpoint list and detailed examples, see [FEATURES.md](FEATURES.md)
 All settings are via environment variables. Defaults are shown.
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `KV_BIND` | `127.0.0.1:8080` | HTTP listen address |
 | `KV_STORE_PATH` | `server_store.json` | Data file path (use `.gz`/`.zst` extension for compression) |
 | `KV_WAL_PATH` | `server.wal` | Write-ahead log path |
@@ -134,7 +134,7 @@ A production-ready `docker-compose.yml` is included with resource limits, read-o
 
 ## Project layout
 
-```
+```text
 src/
   kv_store.rs   Core storage engine (HashMap, LRU, stats)
   api.rs        HTTP handlers
@@ -162,6 +162,7 @@ MIT
 The following production hardening features have been implemented and fully tested:
 
 ### Error Handling
+
 - **Custom Error Types**: Comprehensive error categorization using `thiserror` crate
 - **Error Types Included**:
   - `KeyNotFound` - Key doesn't exist in store
@@ -175,7 +176,8 @@ The following production hardening features have been implemented and fully test
   - `ReadOnly`, `OperationFailed` - Operational errors
 
 ### Input Validation
-- **Key Validation**: 
+
+- **Key Validation**:
   - Reject empty keys
   - Enforce maximum key size (configurable, default 1KB)
 - **Value Validation**:
@@ -187,6 +189,7 @@ The following production hardening features have been implemented and fully test
   - Validate value size > 0
 
 ### Memory Management
+
 - **LRU Eviction**: When memory exceeds limit, least recently used keys are evicted
 - **Memory Tracking**: Accurate memory usage tracking with per-value size estimation
 - **Configurable Limits**: Set max memory per store instance (default 1GB)
@@ -194,13 +197,15 @@ The following production hardening features have been implemented and fully test
 - **Test Coverage**: 19 comprehensive tests covering eviction, LRU ordering, and size validation
 
 ### Structured Logging
+
 - **Tracing Subscriber**: Initialized in both CLI and server binaries
 - **Log Levels**: Configurable via `RUST_LOG` environment variable (default: "info")
 - **Structured Events**: All operations logged with context (key names, operation types, etc.)
 - **Performance**: Minimal overhead, can be disabled entirely via log level
 
 ### Graceful Shutdown
-- **Signal Handling**: 
+
+- **Signal Handling**:
   - Unix: SIGTERM and SIGINT (Ctrl-C)
   - Windows: Ctrl-C and Ctrl-Break
 - **Store Persistence**: Automatic save before shutdown
@@ -208,6 +213,7 @@ The following production hardening features have been implemented and fully test
 - **Clean Termination**: Server stops after completing graceful shutdown sequence
 
 ### Test Coverage
+
 - **87 Total Tests**: 30 library tests + 11 API endpoint tests + 46 integration tests, all passing with 100% success rate
 - **Test Categories**:
   - Input validation (empty keys, size limits)
@@ -260,13 +266,10 @@ cargo test test_memory_limit_enforcement
 ## Reference
 
 Based on system design concepts from:
+
 - [Building an In-Memory Key-Value Store](https://geekpaul.medium.com/system-design-building-an-in-memory-key-value-store-js-4d3aa9aec31c)
 - [Design a Key-Value Store](https://bytebytego.com/courses/system-design-interview/design-a-key-value-store)
 
 ## Contributing
 
 This is a proof-of-concept project for learning system design and Rust. Feel free to fork and extend!
-
-## License
-
-MIT
