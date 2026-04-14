@@ -75,4 +75,22 @@ pub enum Commands {
     Lua { script: String },
     /// Run performance benchmark suite
     Benchmark,
+    /// Push values to the left (head) of a list
+    LPush { key: String, values: Vec<String> },
+    /// Push values to the right (tail) of a list
+    RPush { key: String, values: Vec<String> },
+    /// Pop a value from the left (head) of a list
+    LPop { key: String },
+    /// Pop a value from the right (tail) of a list
+    RPop { key: String },
+    /// Get a range of elements from a list
+    LRange {
+        key: String,
+        #[arg(default_value = "0")]
+        start: i64,
+        #[arg(default_value = "-1")]
+        stop: i64,
+    },
+    /// Get the length of a list
+    LLen { key: String },
 }

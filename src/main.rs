@@ -225,6 +225,42 @@ fn main() {
                 Err(e) => eprintln!("Failed to execute benchmark: {}", e),
             }
         }
+        Commands::LPush { key, values } => match store.lpush(&key, values) {
+            Ok(len) => println!("LPUSH '{}', new length: {}", key, len),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::RPush { key, values } => match store.rpush(&key, values) {
+            Ok(len) => println!("RPUSH '{}', new length: {}", key, len),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::LPop { key } => match store.lpop(&key) {
+            Ok(Some(val)) => println!("{}", val),
+            Ok(None) => println!("(nil)"),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::RPop { key } => match store.rpop(&key) {
+            Ok(Some(val)) => println!("{}", val),
+            Ok(None) => println!("(nil)"),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Commands::LRange { key, start, stop } => {
+            should_save = false;
+            match store.lrange(&key, start, stop) {
+                Ok(values) => {
+                    for (i, v) in values.iter().enumerate() {
+                        println!("{}) {}", i + 1, v);
+                    }
+                }
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::LLen { key } => {
+            should_save = false;
+            match store.llen(&key) {
+                Ok(len) => println!("{}", len),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
     }
 
     // Auto-save after write operations

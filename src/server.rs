@@ -422,7 +422,21 @@ async fn main() -> std::io::Result<()> {
                 .route("/hll/{key}/info", web::get().to(api::hll_info))
                 .route("/hll/{destination}/merge", web::post().to(api::hll_pfmerge))
                 // Lua scripting
-                .route("/lua/exec", web::post().to(api::lua_exec)),
+                .route("/lua/exec", web::post().to(api::lua_exec))
+                // List operations
+                .route("/list/{key}/lpush", web::post().to(api::list_lpush))
+                .route("/list/{key}/rpush", web::post().to(api::list_rpush))
+                .route("/list/{key}/lpop", web::post().to(api::list_lpop))
+                .route("/list/{key}/rpop", web::post().to(api::list_rpop))
+                .route("/list/{key}/lrange", web::get().to(api::list_lrange))
+                .route("/list/{key}/llen", web::get().to(api::list_llen)),
+                // List operations
+                .route("/list/{key}/lpush", web::post().to(api::list_lpush))
+                .route("/list/{key}/rpush", web::post().to(api::list_rpush))
+                .route("/list/{key}/lpop", web::post().to(api::list_lpop))
+                .route("/list/{key}/rpop", web::post().to(api::list_rpop))
+                .route("/list/{key}/lrange", web::get().to(api::list_lrange))
+                .route("/list/{key}/llen", web::get().to(api::list_llen)),
         )
     })
     .max_connections(max_connections);
@@ -538,6 +552,18 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
                 sources,
             } => {
                 let _ = store.pfmerge(destination.clone(), sources);
+            }
+            WalOperation::LPush { key, values } => {
+                let _ = store.lpush(key, values.clone());
+            }
+            WalOperation::RPush { key, values } => {
+                let _ = store.rpush(key, values.clone());
+            }
+            WalOperation::LPop { key } => {
+                let _ = store.lpop(key);
+            }
+            WalOperation::RPop { key } => {
+                let _ = store.rpop(key);
             }
         }
     }

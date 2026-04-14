@@ -64,6 +64,7 @@ pub struct MemoryProfile {
     pub bool_values: usize,
     pub json_values: usize,
     pub hyperloglog_values: usize,
+    pub list_values: usize,
     pub ttl_entries: usize,
     pub heap_fragmentation_ratio: f64,
 }
@@ -80,6 +81,7 @@ impl Default for MemoryProfile {
             bool_values: 0,
             json_values: 0,
             hyperloglog_values: 0,
+            list_values: 0,
             ttl_entries: 0,
             heap_fragmentation_ratio: 0.0,
         }
@@ -99,6 +101,7 @@ pub enum Value {
     Bool(bool),
     Json(JsonValue),
     HyperLogLog(HyperLogLog),
+    List(Vec<String>),
 }
 
 impl fmt::Display for Value {
@@ -110,6 +113,22 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", b),
             Value::Json(j) => write!(f, "{}", j),
             Value::HyperLogLog(hll) => write!(f, "HyperLogLog(count≈{})", hll.count()),
+            Value::List(items) => write!(f, "List(len={})", items.len()),
+        }
+    }
+}
+
+impl Value {
+    /// Return the type name of this value for error messages.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Str(_) => "Str",
+            Value::Int(_) => "Int",
+            Value::Float(_) => "Float",
+            Value::Bool(_) => "Bool",
+            Value::Json(_) => "Json",
+            Value::HyperLogLog(_) => "HyperLogLog",
+            Value::List(_) => "List",
         }
     }
 }
@@ -339,15 +358,11 @@ impl KvStore {
                     debug!("Incremented key '{}' to {}", key, new_val);
                     Ok(new_val)
                 } else {
-                    let type_name = match &entry.value {
-                        Value::Str(_) => "Str",
-                        Value::Int(_) => "Int",
-                        Value::Float(_) => "Float",
-                        Value::Bool(_) => "Bool",
-                        Value::Json(_) => "Json",
-                        Value::HyperLogLog(_) => "HyperLogLog",
-                    };
-                    Err(KvStoreError::type_mismatch(key, "Int", type_name))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Int",
+                        entry.value.type_name(),
+                    ))
                 }
             }
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
@@ -370,15 +385,11 @@ impl KvStore {
                     debug!("Decremented key '{}' to {}", key, new_val);
                     Ok(new_val)
                 } else {
-                    let type_name = match &entry.value {
-                        Value::Str(_) => "Str",
-                        Value::Int(_) => "Int",
-                        Value::Float(_) => "Float",
-                        Value::Bool(_) => "Bool",
-                        Value::Json(_) => "Json",
-                        Value::HyperLogLog(_) => "HyperLogLog",
-                    };
-                    Err(KvStoreError::type_mismatch(key, "Int", type_name))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Int",
+                        entry.value.type_name(),
+                    ))
                 }
             }
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
@@ -401,15 +412,11 @@ impl KvStore {
                     debug!("Incremented key '{}' by {} to {}", key, amount, new_val);
                     Ok(new_val)
                 } else {
-                    let type_name = match &entry.value {
-                        Value::Str(_) => "Str",
-                        Value::Int(_) => "Int",
-                        Value::Float(_) => "Float",
-                        Value::Bool(_) => "Bool",
-                        Value::Json(_) => "Json",
-                        Value::HyperLogLog(_) => "HyperLogLog",
-                    };
-                    Err(KvStoreError::type_mismatch(key, "Int", type_name))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Int",
+                        entry.value.type_name(),
+                    ))
                 }
             }
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
@@ -432,15 +439,11 @@ impl KvStore {
                     debug!("Appended to key '{}', new length: {}", key, new_len);
                     Ok(new_len)
                 } else {
-                    let type_name = match &entry.value {
-                        Value::Str(_) => "Str",
-                        Value::Int(_) => "Int",
-                        Value::Float(_) => "Float",
-                        Value::Bool(_) => "Bool",
-                        Value::Json(_) => "Json",
-                        Value::HyperLogLog(_) => "HyperLogLog",
-                    };
-                    Err(KvStoreError::type_mismatch(key, "Str", type_name))
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Str",
+                        entry.value.type_name(),
+                    ))
                 }
             }
             None => {
@@ -544,15 +547,11 @@ impl KvStore {
                         hll.count()
                     }
                     other => {
-                        let got = match other {
-                            Value::Str(_) => "Str",
-                            Value::Int(_) => "Int",
-                            Value::Float(_) => "Float",
-                            Value::Bool(_) => "Bool",
-                            Value::Json(_) => "Json",
-                            Value::HyperLogLog(_) => "HyperLogLog",
-                        };
-                        return Err(KvStoreError::type_mismatch(&key, "HyperLogLog", got));
+                        return Err(KvStoreError::type_mismatch(
+                            &key,
+                            "HyperLogLog",
+                            other.type_name(),
+                        ));
                     }
                 }
             }
@@ -585,17 +584,11 @@ impl KvStore {
     pub fn pfcount(&self, key: &str) -> Result<u64> {
         match self.get(key) {
             Some(Value::HyperLogLog(hll)) => Ok(hll.count()),
-            Some(other) => {
-                let got = match other {
-                    Value::Str(_) => "Str",
-                    Value::Int(_) => "Int",
-                    Value::Float(_) => "Float",
-                    Value::Bool(_) => "Bool",
-                    Value::Json(_) => "Json",
-                    Value::HyperLogLog(_) => "HyperLogLog",
-                };
-                Err(KvStoreError::type_mismatch(key, "HyperLogLog", got))
-            }
+            Some(other) => Err(KvStoreError::type_mismatch(
+                key,
+                "HyperLogLog",
+                other.type_name(),
+            )),
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
         }
     }
@@ -608,17 +601,11 @@ impl KvStore {
                 memory_bytes: hll.memory_bytes(),
                 estimated_count: hll.count(),
             }),
-            Some(other) => {
-                let got = match other {
-                    Value::Str(_) => "Str",
-                    Value::Int(_) => "Int",
-                    Value::Float(_) => "Float",
-                    Value::Bool(_) => "Bool",
-                    Value::Json(_) => "Json",
-                    Value::HyperLogLog(_) => "HyperLogLog",
-                };
-                Err(KvStoreError::type_mismatch(key, "HyperLogLog", got))
-            }
+            Some(other) => Err(KvStoreError::type_mismatch(
+                key,
+                "HyperLogLog",
+                other.type_name(),
+            )),
             None => Err(KvStoreError::KeyNotFound(key.to_string())),
         }
     }
@@ -640,18 +627,10 @@ impl KvStore {
                 ..
             }) => hll.clone(),
             Some(ValueWithTTL { value, .. }) => {
-                let got = match value {
-                    Value::Str(_) => "Str",
-                    Value::Int(_) => "Int",
-                    Value::Float(_) => "Float",
-                    Value::Bool(_) => "Bool",
-                    Value::Json(_) => "Json",
-                    Value::HyperLogLog(_) => "HyperLogLog",
-                };
                 return Err(KvStoreError::type_mismatch(
                     &destination,
                     "HyperLogLog",
-                    got,
+                    value.type_name(),
                 ));
             }
             None => HyperLogLog::default(),
@@ -665,15 +644,11 @@ impl KvStore {
                 match &entry.value {
                     Value::HyperLogLog(hll) => merged.merge(hll)?,
                     other => {
-                        let got = match other {
-                            Value::Str(_) => "Str",
-                            Value::Int(_) => "Int",
-                            Value::Float(_) => "Float",
-                            Value::Bool(_) => "Bool",
-                            Value::Json(_) => "Json",
-                            Value::HyperLogLog(_) => "HyperLogLog",
-                        };
-                        return Err(KvStoreError::type_mismatch(source_key, "HyperLogLog", got));
+                        return Err(KvStoreError::type_mismatch(
+                            source_key,
+                            "HyperLogLog",
+                            other.type_name(),
+                        ));
                     }
                 }
             }
@@ -798,6 +773,10 @@ impl KvStore {
                 Value::HyperLogLog(hll) => {
                     profile.value_bytes += hll.memory_bytes();
                     profile.hyperloglog_values += 1;
+                }
+                Value::List(items) => {
+                    profile.value_bytes += items.iter().map(|s| s.len()).sum::<usize>() + 24;
+                    profile.list_values += 1;
                 }
             }
 
@@ -1026,6 +1005,7 @@ impl KvStore {
             Value::Bool(_) => 1,
             Value::Json(j) => j.to_string().len(),
             Value::HyperLogLog(hll) => hll.memory_bytes(),
+            Value::List(items) => items.iter().map(|s| s.len()).sum::<usize>() + 24,
         }
     }
 
@@ -1212,6 +1192,181 @@ impl KvStore {
         self.transaction_queue = None;
         info!("Transaction discarded");
         Ok(())
+    }
+
+    // ===== List Operations =====
+
+    /// Push one or more values to the left (head) of a list. Creates the list if it doesn't exist.
+    /// Returns the new length of the list.
+    pub fn lpush(&mut self, key: &str, values: Vec<String>) -> Result<usize> {
+        self.validate_key(key)?;
+        let len = match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::List(ref mut list) = entry.value {
+                    for v in values.into_iter().rev() {
+                        list.insert(0, v);
+                    }
+                    self.stats.total_writes += 1;
+                    list.len()
+                } else {
+                    return Err(KvStoreError::type_mismatch(
+                        key,
+                        "List",
+                        entry.value.type_name(),
+                    ));
+                }
+            }
+            None => {
+                let mut list: Vec<String> = Vec::new();
+                for v in values.into_iter().rev() {
+                    list.insert(0, v);
+                }
+                let len = list.len();
+                let value = Value::List(list);
+                let value_size = self.estimate_value_size(&value);
+                self.store.insert(
+                    key.to_string(),
+                    ValueWithTTL {
+                        value,
+                        expires_at: None,
+                    },
+                );
+                self.stats.total_writes += 1;
+                self.stats.total_keys = self.store.len();
+                self.stats.memory_bytes += value_size;
+                len
+            }
+        };
+        self.update_lru(key);
+        debug!("LPUSH key '{}', new length: {}", key, len);
+        Ok(len)
+    }
+
+    /// Push one or more values to the right (tail) of a list. Creates the list if it doesn't exist.
+    /// Returns the new length of the list.
+    pub fn rpush(&mut self, key: &str, values: Vec<String>) -> Result<usize> {
+        self.validate_key(key)?;
+        let len = match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::List(ref mut list) = entry.value {
+                    list.extend(values);
+                    self.stats.total_writes += 1;
+                    list.len()
+                } else {
+                    return Err(KvStoreError::type_mismatch(
+                        key,
+                        "List",
+                        entry.value.type_name(),
+                    ));
+                }
+            }
+            None => {
+                let list = values;
+                let len = list.len();
+                let value = Value::List(list);
+                let value_size = self.estimate_value_size(&value);
+                self.store.insert(
+                    key.to_string(),
+                    ValueWithTTL {
+                        value,
+                        expires_at: None,
+                    },
+                );
+                self.stats.total_writes += 1;
+                self.stats.total_keys = self.store.len();
+                self.stats.memory_bytes += value_size;
+                len
+            }
+        };
+        self.update_lru(key);
+        debug!("RPUSH key '{}', new length: {}", key, len);
+        Ok(len)
+    }
+
+    /// Pop and return the first element from a list.
+    pub fn lpop(&mut self, key: &str) -> Result<Option<String>> {
+        match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::List(ref mut list) = entry.value {
+                    if list.is_empty() {
+                        Ok(None)
+                    } else {
+                        let val = list.remove(0);
+                        self.stats.total_writes += 1;
+                        self.update_lru(key);
+                        debug!("LPOP key '{}': {}", key, val);
+                        Ok(Some(val))
+                    }
+                } else {
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "List",
+                        entry.value.type_name(),
+                    ))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Pop and return the last element from a list.
+    pub fn rpop(&mut self, key: &str) -> Result<Option<String>> {
+        match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::List(ref mut list) = entry.value {
+                    let val = list.pop();
+                    if val.is_some() {
+                        self.stats.total_writes += 1;
+                        self.update_lru(key);
+                        debug!("RPOP key '{}': {:?}", key, val);
+                    }
+                    Ok(val)
+                } else {
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "List",
+                        entry.value.type_name(),
+                    ))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Return a sub-range of elements from a list (0-based, inclusive on both ends).
+    /// Negative indices count from the end (-1 = last element).
+    pub fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<String>> {
+        match self.get(key) {
+            Some(Value::List(list)) => {
+                let len = list.len() as i64;
+                let start = if start < 0 {
+                    (len + start).max(0) as usize
+                } else {
+                    start.min(len) as usize
+                };
+                let stop = if stop < 0 {
+                    (len + stop).max(0) as usize
+                } else {
+                    stop.min(len - 1) as usize
+                };
+                if start > stop || start >= len as usize {
+                    Ok(Vec::new())
+                } else {
+                    Ok(list[start..=stop].to_vec())
+                }
+            }
+            Some(other) => Err(KvStoreError::type_mismatch(key, "List", other.type_name())),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Return the length of a list (0 if key doesn't exist).
+    pub fn llen(&self, key: &str) -> Result<usize> {
+        match self.get(key) {
+            Some(Value::List(list)) => Ok(list.len()),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "List", other.type_name())),
+            None => Ok(0),
+        }
     }
 
     /// Queue an operation in the current transaction

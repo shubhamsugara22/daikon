@@ -44,6 +44,14 @@ pub enum WalOperation {
         destination: String,
         sources: Vec<String>,
     },
+    #[serde(rename = "LPUSH")]
+    LPush { key: String, values: Vec<String> },
+    #[serde(rename = "RPUSH")]
+    RPush { key: String, values: Vec<String> },
+    #[serde(rename = "LPOP")]
+    LPop { key: String },
+    #[serde(rename = "RPOP")]
+    RPop { key: String },
 }
 
 impl WalEntry {

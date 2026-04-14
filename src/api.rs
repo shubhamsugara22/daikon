@@ -60,6 +60,41 @@ pub struct CleanupSnapshotsRequest {
     max_age_secs: u64,
 }
 
+#[derive(Deserialize)]
+pub struct ListPushRequest {
+    pub values: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LRangeQuery {
+    pub start: Option<i64>,
+    pub stop: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct ListPushResponse {
+    pub key: String,
+    pub length: usize,
+}
+
+#[derive(Serialize)]
+pub struct ListPopResponse {
+    pub key: String,
+    pub value: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ListRangeResponse {
+    pub key: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ListLenResponse {
+    pub key: String,
+    pub length: usize,
+}
+
 #[derive(Serialize)]
 pub struct ListResponse {
     keys: Vec<String>,
@@ -1100,6 +1135,153 @@ pub async fn lua_exec(
 
     match lua::execute_script(&mut store, Some(&wal), &req.script) {
         Ok(output) => HttpResponse::Ok().json(LuaExecResponse { output }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// ===== List Operation Handlers =====
+
+pub async fn list_lpush(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+    body: web::Json<ListPushRequest>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, &config) {
+        return resp;
+    }
+    let key = path.into_inner();
+    let values = body.into_inner().values;
+
+    let wal_entry = WalEntry::new(WalOperation::LPush {
+        key: key.clone(),
+        values: values.clone(),
+    });
+    if let Err(e) = wal.append(&wal_entry) {
+        return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+    }
+
+    let mut store = store.write();
+    match store.lpush(&key, values) {
+        Ok(length) => HttpResponse::Ok().json(ListPushResponse { key, length }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn list_rpush(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+    body: web::Json<ListPushRequest>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, &config) {
+        return resp;
+    }
+    let key = path.into_inner();
+    let values = body.into_inner().values;
+
+    let wal_entry = WalEntry::new(WalOperation::RPush {
+        key: key.clone(),
+        values: values.clone(),
+    });
+    if let Err(e) = wal.append(&wal_entry) {
+        return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+    }
+
+    let mut store = store.write();
+    match store.rpush(&key, values) {
+        Ok(length) => HttpResponse::Ok().json(ListPushResponse { key, length }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn list_lpop(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, &config) {
+        return resp;
+    }
+    let key = path.into_inner();
+
+    let wal_entry = WalEntry::new(WalOperation::LPop { key: key.clone() });
+    if let Err(e) = wal.append(&wal_entry) {
+        return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+    }
+
+    let mut store = store.write();
+    match store.lpop(&key) {
+        Ok(value) => HttpResponse::Ok().json(ListPopResponse { key, value }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn list_rpop(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, &config) {
+        return resp;
+    }
+    let key = path.into_inner();
+
+    let wal_entry = WalEntry::new(WalOperation::RPop { key: key.clone() });
+    if let Err(e) = wal.append(&wal_entry) {
+        return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+    }
+
+    let mut store = store.write();
+    match store.rpop(&key) {
+        Ok(value) => HttpResponse::Ok().json(ListPopResponse { key, value }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn list_lrange(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+    query: web::Query<LRangeQuery>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, &config) {
+        return resp;
+    }
+    let key = path.into_inner();
+    let start = query.start.unwrap_or(0);
+    let stop = query.stop.unwrap_or(-1);
+
+    let store = store.read();
+    match store.lrange(&key, start, stop) {
+        Ok(values) => HttpResponse::Ok().json(ListRangeResponse { key, values }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn list_llen(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, &config) {
+        return resp;
+    }
+    let key = path.into_inner();
+
+    let store = store.read();
+    match store.llen(&key) {
+        Ok(length) => HttpResponse::Ok().json(ListLenResponse { key, length }),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
