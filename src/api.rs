@@ -1207,6 +1207,396 @@ pub async fn lua_exec(
     }
 }
 
+// POST /api/pipeline
+pub async fn pipeline_exec(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    req: web::Json<PipelineRequest>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
+    if req.commands.is_empty() {
+        return HttpResponse::BadRequest().body("Pipeline must contain at least one command");
+    }
+
+    if req.commands.len() > MAX_PIPELINE_COMMANDS {
+        return HttpResponse::PayloadTooLarge().body(format!(
+            "Pipeline exceeds maximum of {} commands",
+            MAX_PIPELINE_COMMANDS
+        ));
+    }
+
+    let mut store = store.write();
+    let mut results = Vec::with_capacity(req.commands.len());
+
+    for cmd in &req.commands {
+        let result = match cmd {
+            PipelineCommand::Get { key } => match store.get(key) {
+                Some(value) => PipelineResult {
+                    status: "ok".into(),
+                    value: Some(serde_json::Value::String(value.to_string())),
+                    error: None,
+                },
+                None => PipelineResult {
+                    status: "ok".into(),
+                    value: None,
+                    error: None,
+                },
+            },
+            PipelineCommand::Set {
+                key,
+                value,
+                ttl_secs,
+            } => {
+                let entry = WalEntry::new(WalOperation::Set {
+                    key: key.clone(),
+                    value: value.clone(),
+                    ttl_secs: *ttl_secs,
+                });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else if let Some(ttl) = ttl_secs {
+                    match store.set_with_ttl(key.clone(), value.clone(), Duration::from_secs(*ttl))
+                    {
+                        Ok(_) => PipelineResult {
+                            status: "ok".into(),
+                            value: None,
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                } else {
+                    match store.set(key.clone(), value.clone()) {
+                        Ok(_) => PipelineResult {
+                            status: "ok".into(),
+                            value: None,
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::Delete { key } => {
+                let entry = WalEntry::new(WalOperation::Delete { key: key.clone() });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.delete(key) {
+                        Some(_) => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::Value::Bool(true)),
+                            error: None,
+                        },
+                        None => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::Value::Bool(false)),
+                            error: None,
+                        },
+                    }
+                }
+            }
+            PipelineCommand::Incr { key } => {
+                let entry = WalEntry::new(WalOperation::Incr { key: key.clone() });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.incr(key) {
+                        Ok(val) => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::json!(val)),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::Decr { key } => {
+                let entry = WalEntry::new(WalOperation::Decr { key: key.clone() });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.decr(key) {
+                        Ok(val) => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::json!(val)),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::IncrBy { key, amount } => {
+                let entry = WalEntry::new(WalOperation::IncrBy {
+                    key: key.clone(),
+                    amount: *amount,
+                });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.incrby(key, *amount) {
+                        Ok(val) => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::json!(val)),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::Append { key, value } => {
+                let entry = WalEntry::new(WalOperation::Append {
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.append(key, value) {
+                        Ok(len) => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::json!(len)),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::GetSet { key, value } => {
+                let entry = WalEntry::new(WalOperation::GetSet {
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.getset(key.clone(), value.clone()) {
+                        Ok(old) => PipelineResult {
+                            status: "ok".into(),
+                            value: old.map(|v| serde_json::Value::String(v.to_string())),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::Exists { key } => {
+                let exists = store.exists(key);
+                PipelineResult {
+                    status: "ok".into(),
+                    value: Some(serde_json::Value::Bool(exists)),
+                    error: None,
+                }
+            }
+            PipelineCommand::MGet { keys } => {
+                let values = store.mget(keys);
+                let arr: Vec<serde_json::Value> = values
+                    .iter()
+                    .map(|v| match v {
+                        Some(val) => serde_json::Value::String(val.to_string()),
+                        None => serde_json::Value::Null,
+                    })
+                    .collect();
+                PipelineResult {
+                    status: "ok".into(),
+                    value: Some(serde_json::Value::Array(arr)),
+                    error: None,
+                }
+            }
+            PipelineCommand::LPush { key, values } => {
+                let entry = WalEntry::new(WalOperation::LPush {
+                    key: key.clone(),
+                    values: values.clone(),
+                });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.lpush(key, values.clone()) {
+                        Ok(len) => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::json!(len)),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::RPush { key, values } => {
+                let entry = WalEntry::new(WalOperation::RPush {
+                    key: key.clone(),
+                    values: values.clone(),
+                });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.rpush(key, values.clone()) {
+                        Ok(len) => PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::json!(len)),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::LPop { key } => {
+                let entry = WalEntry::new(WalOperation::LPop { key: key.clone() });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.lpop(key) {
+                        Ok(val) => PipelineResult {
+                            status: "ok".into(),
+                            value: val.map(serde_json::Value::String),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::RPop { key } => {
+                let entry = WalEntry::new(WalOperation::RPop { key: key.clone() });
+                if let Err(e) = wal.append(&entry) {
+                    PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(format!("WAL error: {}", e)),
+                    }
+                } else {
+                    match store.rpop(key) {
+                        Ok(val) => PipelineResult {
+                            status: "ok".into(),
+                            value: val.map(serde_json::Value::String),
+                            error: None,
+                        },
+                        Err(e) => PipelineResult {
+                            status: "error".into(),
+                            value: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            }
+            PipelineCommand::LRange { key, start, stop } => {
+                match store.lrange(key, start.unwrap_or(0), stop.unwrap_or(-1)) {
+                    Ok(values) => {
+                        let arr: Vec<serde_json::Value> =
+                            values.into_iter().map(serde_json::Value::String).collect();
+                        PipelineResult {
+                            status: "ok".into(),
+                            value: Some(serde_json::Value::Array(arr)),
+                            error: None,
+                        }
+                    }
+                    Err(e) => PipelineResult {
+                        status: "error".into(),
+                        value: None,
+                        error: Some(e.to_string()),
+                    },
+                }
+            }
+            PipelineCommand::LLen { key } => match store.llen(key) {
+                Ok(len) => PipelineResult {
+                    status: "ok".into(),
+                    value: Some(serde_json::json!(len)),
+                    error: None,
+                },
+                Err(e) => PipelineResult {
+                    status: "error".into(),
+                    value: None,
+                    error: Some(e.to_string()),
+                },
+            },
+        };
+        results.push(result);
+    }
+
+    HttpResponse::Ok().json(PipelineResponse { results })
+}
+
 // ===== List Operation Handlers =====
 
 pub async fn list_lpush(

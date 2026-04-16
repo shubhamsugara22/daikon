@@ -437,3 +437,273 @@ async fn test_api_lua_exec_rejected_when_disabled() {
     let resp = awtest::call_service(&app, req).await;
     assert_eq!(resp.status(), 403);
 }
+
+// ── Pipeline tests ──────────────────────────────────────────────────
+
+#[actix_web::test]
+async fn test_api_pipeline_basic_set_get() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_basic.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .set_json(serde_json::json!({
+            "commands": [
+                { "op": "SET", "key": "k1", "value": "hello" },
+                { "op": "SET", "key": "k2", "value": "world" },
+                { "op": "GET", "key": "k1" },
+                { "op": "GET", "key": "k2" },
+                { "op": "GET", "key": "missing" }
+            ]
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 5);
+    assert_eq!(results[0]["status"], "ok");
+    assert_eq!(results[1]["status"], "ok");
+    assert_eq!(results[2]["status"], "ok");
+    assert_eq!(results[2]["value"], "hello");
+    assert_eq!(results[3]["value"], "world");
+    assert!(results[4]["value"].is_null());
+}
+
+#[actix_web::test]
+async fn test_api_pipeline_mixed_ops() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_mixed.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .set_json(serde_json::json!({
+            "commands": [
+                { "op": "SET", "key": "counter", "value": "10" },
+                { "op": "INCR", "key": "counter" },
+                { "op": "INCRBY", "key": "counter", "amount": 5 },
+                { "op": "DECR", "key": "counter" },
+                { "op": "GET", "key": "counter" },
+                { "op": "DELETE", "key": "counter" },
+                { "op": "EXISTS", "key": "counter" }
+            ]
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 7);
+    // SET "10" -> INCR -> 11 -> INCRBY 5 -> 16 -> DECR -> 15
+    assert_eq!(results[1]["value"], 11);
+    assert_eq!(results[2]["value"], 16);
+    assert_eq!(results[3]["value"], 15);
+    assert_eq!(results[4]["value"], "15");
+    assert_eq!(results[5]["value"], true); // deleted
+    assert_eq!(results[6]["value"], false); // gone
+}
+
+#[actix_web::test]
+async fn test_api_pipeline_list_ops() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_list.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .set_json(serde_json::json!({
+            "commands": [
+                { "op": "RPUSH", "key": "mylist", "values": ["a", "b", "c"] },
+                { "op": "LPUSH", "key": "mylist", "values": ["z"] },
+                { "op": "LLEN", "key": "mylist" },
+                { "op": "LRANGE", "key": "mylist", "start": 0, "stop": -1 },
+                { "op": "LPOP", "key": "mylist" },
+                { "op": "RPOP", "key": "mylist" },
+                { "op": "LLEN", "key": "mylist" }
+            ]
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 7);
+    assert_eq!(results[0]["value"], 3); // rpush len
+    assert_eq!(results[1]["value"], 4); // lpush len
+    assert_eq!(results[2]["value"], 4); // llen
+    assert_eq!(results[3]["value"], serde_json::json!(["z", "a", "b", "c"]));
+    assert_eq!(results[4]["value"], "z"); // lpop
+    assert_eq!(results[5]["value"], "c"); // rpop
+    assert_eq!(results[6]["value"], 2); // final llen
+}
+
+#[actix_web::test]
+async fn test_api_pipeline_empty_rejected() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_empty.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .set_json(serde_json::json!({ "commands": [] }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[actix_web::test]
+async fn test_api_pipeline_auth_required() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_auth.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(api::ApiRuntimeConfig {
+                api_key: Some("secret".to_string()),
+                lua_enabled: false,
+                max_lua_script_bytes: 1024,
+            }))
+            .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
+    )
+    .await;
+
+    // No key -> 401
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .set_json(serde_json::json!({
+            "commands": [{ "op": "GET", "key": "k1" }]
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+
+    // With key -> 200
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .insert_header(("x-api-key", "secret"))
+        .set_json(serde_json::json!({
+            "commands": [{ "op": "GET", "key": "k1" }]
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_api_pipeline_error_mid_batch() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_mid_err.wal")).unwrap());
+
+    // Pre-populate with a list
+    {
+        let mut s = store.write();
+        s.rpush("mylist", vec!["a".to_string()]).unwrap();
+    }
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
+    )
+    .await;
+
+    // Try incrementing a list key (type mismatch)
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .set_json(serde_json::json!({
+            "commands": [
+                { "op": "SET", "key": "good", "value": "yes" },
+                { "op": "INCR", "key": "mylist" },
+                { "op": "GET", "key": "good" }
+            ]
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["status"], "ok");
+    assert_eq!(results[1]["status"], "error"); // type mismatch
+    assert!(results[1]["error"].as_str().is_some());
+    assert_eq!(results[2]["status"], "ok"); // rest continues
+    assert_eq!(results[2]["value"], "yes");
+}
+
+#[actix_web::test]
+async fn test_api_pipeline_append_and_getset() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_append.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/pipeline")
+        .set_json(serde_json::json!({
+            "commands": [
+                { "op": "SET", "key": "msg", "value": "hello" },
+                { "op": "APPEND", "key": "msg", "value": " world" },
+                { "op": "GET", "key": "msg" },
+                { "op": "GETSET", "key": "msg", "value": "replaced" },
+                { "op": "GET", "key": "msg" },
+                { "op": "MGET", "keys": ["msg", "missing"] }
+            ]
+        }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = awtest::read_body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 6);
+    assert_eq!(results[1]["value"], 11); // append length "hello world"
+    assert_eq!(results[2]["value"], "hello world");
+    assert_eq!(results[3]["value"], "hello world"); // getset returns old
+    assert_eq!(results[4]["value"], "replaced");
+    assert_eq!(results[5]["value"], serde_json::json!(["replaced", null]));
+}

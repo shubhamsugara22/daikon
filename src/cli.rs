@@ -93,4 +93,6 @@ pub enum Commands {
     },
     /// Get the length of a list
     LLen { key: String },
+    /// Execute a pipeline of commands from a JSON file
+    Pipeline { file: PathBuf },
 }

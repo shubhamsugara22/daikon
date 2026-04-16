@@ -261,6 +261,144 @@ fn main() {
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
+        Commands::Pipeline { file } => {
+            let contents = match std::fs::read_to_string(&file) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error reading pipeline file {:?}: {}", file, e);
+                    return;
+                }
+            };
+
+            #[derive(serde::Deserialize)]
+            #[serde(tag = "op")]
+            enum PipeCmd {
+                #[serde(rename = "GET")]
+                Get { key: String },
+                #[serde(rename = "SET")]
+                Set { key: String, value: String },
+                #[serde(rename = "DELETE")]
+                Delete { key: String },
+                #[serde(rename = "INCR")]
+                Incr { key: String },
+                #[serde(rename = "DECR")]
+                Decr { key: String },
+                #[serde(rename = "INCRBY")]
+                IncrBy { key: String, amount: i64 },
+                #[serde(rename = "APPEND")]
+                Append { key: String, value: String },
+                #[serde(rename = "GETSET")]
+                GetSet { key: String, value: String },
+                #[serde(rename = "EXISTS")]
+                Exists { key: String },
+                #[serde(rename = "LPUSH")]
+                LPush { key: String, values: Vec<String> },
+                #[serde(rename = "RPUSH")]
+                RPush { key: String, values: Vec<String> },
+                #[serde(rename = "LPOP")]
+                LPop { key: String },
+                #[serde(rename = "RPOP")]
+                RPop { key: String },
+                #[serde(rename = "LRANGE")]
+                LRange {
+                    key: String,
+                    start: Option<i64>,
+                    stop: Option<i64>,
+                },
+                #[serde(rename = "LLEN")]
+                LLen { key: String },
+            }
+
+            let commands: Vec<PipeCmd> = match serde_json::from_str(&contents) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error parsing pipeline JSON: {}", e);
+                    return;
+                }
+            };
+
+            println!("Executing {} commands...", commands.len());
+            for (i, cmd) in commands.iter().enumerate() {
+                let idx = i + 1;
+                match cmd {
+                    PipeCmd::Get { key } => match store.get(key) {
+                        Some(v) => println!("  {}) GET {} = {}", idx, key, v),
+                        None => println!("  {}) GET {} = (nil)", idx, key),
+                    },
+                    PipeCmd::Set { key, value } => match store.set(key.clone(), value.clone()) {
+                        Ok(_) => println!("  {}) SET {} OK", idx, key),
+                        Err(e) => eprintln!("  {}) SET {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::Delete { key } => match store.delete(key) {
+                        Some(_) => println!("  {}) DELETE {} OK", idx, key),
+                        None => println!("  {}) DELETE {} (not found)", idx, key),
+                    },
+                    PipeCmd::Incr { key } => match store.incr(key) {
+                        Ok(v) => println!("  {}) INCR {} = {}", idx, key, v),
+                        Err(e) => eprintln!("  {}) INCR {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::Decr { key } => match store.decr(key) {
+                        Ok(v) => println!("  {}) DECR {} = {}", idx, key, v),
+                        Err(e) => eprintln!("  {}) DECR {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::IncrBy { key, amount } => match store.incrby(key, *amount) {
+                        Ok(v) => println!("  {}) INCRBY {} {} = {}", idx, key, amount, v),
+                        Err(e) => eprintln!("  {}) INCRBY {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::Append { key, value } => match store.append(key, value) {
+                        Ok(len) => println!("  {}) APPEND {} len={}", idx, key, len),
+                        Err(e) => eprintln!("  {}) APPEND {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::GetSet { key, value } => {
+                        match store.getset(key.clone(), value.clone()) {
+                            Ok(Some(old)) => {
+                                println!("  {}) GETSET {} old={}", idx, key, old)
+                            }
+                            Ok(None) => println!("  {}) GETSET {} old=(nil)", idx, key),
+                            Err(e) => eprintln!("  {}) GETSET {} Error: {}", idx, key, e),
+                        }
+                    }
+                    PipeCmd::Exists { key } => {
+                        let exists = store.exists(key);
+                        println!("  {}) EXISTS {} = {}", idx, key, exists);
+                    }
+                    PipeCmd::LPush { key, values } => match store.lpush(key, values.clone()) {
+                        Ok(len) => println!("  {}) LPUSH {} len={}", idx, key, len),
+                        Err(e) => eprintln!("  {}) LPUSH {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::RPush { key, values } => match store.rpush(key, values.clone()) {
+                        Ok(len) => println!("  {}) RPUSH {} len={}", idx, key, len),
+                        Err(e) => eprintln!("  {}) RPUSH {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::LPop { key } => match store.lpop(key) {
+                        Ok(Some(v)) => println!("  {}) LPOP {} = {}", idx, key, v),
+                        Ok(None) => println!("  {}) LPOP {} = (nil)", idx, key),
+                        Err(e) => eprintln!("  {}) LPOP {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::RPop { key } => match store.rpop(key) {
+                        Ok(Some(v)) => println!("  {}) RPOP {} = {}", idx, key, v),
+                        Ok(None) => println!("  {}) RPOP {} = (nil)", idx, key),
+                        Err(e) => eprintln!("  {}) RPOP {} Error: {}", idx, key, e),
+                    },
+                    PipeCmd::LRange { key, start, stop } => {
+                        match store.lrange(key, start.unwrap_or(0), stop.unwrap_or(-1)) {
+                            Ok(vals) => {
+                                println!("  {}) LRANGE {}:", idx, key);
+                                for (j, v) in vals.iter().enumerate() {
+                                    println!("       {}) {}", j + 1, v);
+                                }
+                            }
+                            Err(e) => eprintln!("  {}) LRANGE {} Error: {}", idx, key, e),
+                        }
+                    }
+                    PipeCmd::LLen { key } => match store.llen(key) {
+                        Ok(len) => println!("  {}) LLEN {} = {}", idx, key, len),
+                        Err(e) => eprintln!("  {}) LLEN {} Error: {}", idx, key, e),
+                    },
+                }
+            }
+            println!("Pipeline complete ({} commands)", commands.len());
+        }
     }
 
     // Auto-save after write operations
