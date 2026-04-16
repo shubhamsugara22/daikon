@@ -485,6 +485,16 @@ async fn test_api_pipeline_mixed_ops() {
     let temp_dir = TempDir::new().unwrap();
     let wal = Arc::new(Wal::new(temp_dir.path().join("pipe_mixed.wal")).unwrap());
 
+    // Pre-populate with an Int so INCR/DECR/INCRBY work
+    {
+        let mut s = store.write();
+        s.set(
+            "counter".to_string(),
+            rust_kv_store::kv_store::Value::Int(10),
+        )
+        .unwrap();
+    }
+
     let app = awtest::init_service(
         App::new()
             .app_data(web::Data::from(store))
@@ -497,7 +507,6 @@ async fn test_api_pipeline_mixed_ops() {
         .uri("/api/pipeline")
         .set_json(serde_json::json!({
             "commands": [
-                { "op": "SET", "key": "counter", "value": "10" },
                 { "op": "INCR", "key": "counter" },
                 { "op": "INCRBY", "key": "counter", "amount": 5 },
                 { "op": "DECR", "key": "counter" },
@@ -511,14 +520,14 @@ async fn test_api_pipeline_mixed_ops() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = awtest::read_body_json(resp).await;
     let results = body["results"].as_array().unwrap();
-    assert_eq!(results.len(), 7);
-    // SET "10" -> INCR -> 11 -> INCRBY 5 -> 16 -> DECR -> 15
-    assert_eq!(results[1]["value"], 11);
-    assert_eq!(results[2]["value"], 16);
-    assert_eq!(results[3]["value"], 15);
-    assert_eq!(results[4]["value"], "15");
-    assert_eq!(results[5]["value"], true); // deleted
-    assert_eq!(results[6]["value"], false); // gone
+    assert_eq!(results.len(), 6);
+    // 10 -> INCR -> 11 -> INCRBY 5 -> 16 -> DECR -> 15
+    assert_eq!(results[0]["value"], 11);
+    assert_eq!(results[1]["value"], 16);
+    assert_eq!(results[2]["value"], 15);
+    assert_eq!(results[3]["value"], "15");
+    assert_eq!(results[4]["value"], true); // deleted
+    assert_eq!(results[5]["value"], false); // gone
 }
 
 #[actix_web::test]
