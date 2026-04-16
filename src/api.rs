@@ -1,6 +1,7 @@
 use actix_web::{http::header, web, HttpRequest, HttpResponse, Responder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::kv_store::KvStore;
 use crate::lua;
@@ -149,6 +150,73 @@ pub struct ChannelsResponse {
 pub struct SubscribersResponse {
     pub channel: String,
     pub subscribers: Vec<String>,
+}
+
+// Pipeline types
+const MAX_PIPELINE_COMMANDS: usize = 1000;
+
+#[derive(Deserialize)]
+#[serde(tag = "op")]
+pub enum PipelineCommand {
+    #[serde(rename = "GET")]
+    Get { key: String },
+    #[serde(rename = "SET")]
+    Set {
+        key: String,
+        value: String,
+        ttl_secs: Option<u64>,
+    },
+    #[serde(rename = "DELETE")]
+    Delete { key: String },
+    #[serde(rename = "INCR")]
+    Incr { key: String },
+    #[serde(rename = "DECR")]
+    Decr { key: String },
+    #[serde(rename = "INCRBY")]
+    IncrBy { key: String, amount: i64 },
+    #[serde(rename = "APPEND")]
+    Append { key: String, value: String },
+    #[serde(rename = "GETSET")]
+    GetSet { key: String, value: String },
+    #[serde(rename = "EXISTS")]
+    Exists { key: String },
+    #[serde(rename = "MGET")]
+    MGet { keys: Vec<String> },
+    #[serde(rename = "LPUSH")]
+    LPush { key: String, values: Vec<String> },
+    #[serde(rename = "RPUSH")]
+    RPush { key: String, values: Vec<String> },
+    #[serde(rename = "LPOP")]
+    LPop { key: String },
+    #[serde(rename = "RPOP")]
+    RPop { key: String },
+    #[serde(rename = "LRANGE")]
+    LRange {
+        key: String,
+        start: Option<i64>,
+        stop: Option<i64>,
+    },
+    #[serde(rename = "LLEN")]
+    LLen { key: String },
+}
+
+#[derive(Deserialize)]
+pub struct PipelineRequest {
+    pub commands: Vec<PipelineCommand>,
+}
+
+#[derive(Serialize)]
+pub struct PipelineResult {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PipelineResponse {
+    pub results: Vec<PipelineResult>,
 }
 
 fn require_api_key(
