@@ -43,6 +43,10 @@ pub struct StoreConfig {
     /// Enable detailed logging
     #[serde(default = "default_enable_logging")]
     pub enable_logging: bool,
+
+    /// Enable keyspace notifications (events published to __keyevent__ and __keyspace__ channels)
+    #[serde(default)]
+    pub keyspace_notifications_enabled: bool,
 }
 
 impl Default for StoreConfig {
@@ -58,6 +62,7 @@ impl Default for StoreConfig {
             snapshot_interval_secs: default_snapshot_interval_secs(),
             backup_versions: default_backup_versions(),
             enable_logging: default_enable_logging(),
+            keyspace_notifications_enabled: false,
         }
     }
 }

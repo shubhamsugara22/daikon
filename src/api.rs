@@ -242,6 +242,19 @@ fn require_api_key(
     }
 }
 
+/// Drain pending keyspace events from the store and publish them to PubSub channels.
+/// Publishes to both `__keyevent__:{kind}` (message = key) and `__keyspace__:{key}` (message = kind).
+fn publish_keyspace_events(store: &mut KvStore, pubsub: &PubSub) {
+    let events = store.drain_keyspace_events();
+    for event in events {
+        let kind_str = event.kind.to_string();
+        // __keyevent__:<event> channel — message is the key name
+        pubsub.publish(&format!("__keyevent__:{}", kind_str), &event.key);
+        // __keyspace__:<key> channel — message is the event type
+        pubsub.publish(&format!("__keyspace__:{}", event.key), &kind_str);
+    }
+}
+
 pub async fn health_live(runtime: Option<web::Data<ApiRuntimeConfig>>) -> impl Responder {
     HttpResponse::Ok().json(HealthResponse {
         status: "ok",

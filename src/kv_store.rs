@@ -180,6 +180,38 @@ pub enum TransactionOp {
     Append(String, String),
 }
 
+/// The kind of keyspace event that occurred
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KeyspaceEventKind {
+    /// A key was created or updated
+    Set,
+    /// A key was explicitly deleted
+    Delete,
+    /// A key expired due to TTL
+    Expired,
+    /// A key was evicted due to LRU memory pressure
+    Evicted,
+}
+
+impl fmt::Display for KeyspaceEventKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            KeyspaceEventKind::Set => write!(f, "set"),
+            KeyspaceEventKind::Delete => write!(f, "del"),
+            KeyspaceEventKind::Expired => write!(f, "expired"),
+            KeyspaceEventKind::Evicted => write!(f, "evicted"),
+        }
+    }
+}
+
+/// A keyspace notification event emitted when keys change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyspaceEvent {
+    pub kind: KeyspaceEventKind,
+    pub key: String,
+    pub timestamp: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct KvStore {
     store: HashMap<String, ValueWithTTL>,
@@ -191,6 +223,8 @@ pub struct KvStore {
     lru_order: Vec<String>,
     #[serde(skip)]
     transaction_queue: Option<Vec<TransactionOp>>,
+    #[serde(skip)]
+    pending_keyspace_events: Vec<KeyspaceEvent>,
 }
 
 impl Default for KvStore {
@@ -212,6 +246,7 @@ impl KvStore {
             config,
             lru_order: Vec::new(),
             transaction_queue: None,
+            pending_keyspace_events: Vec::new(),
         }
     }
     pub fn set_with_ttl<V>(&mut self, key: String, value: V, ttl: Duration) -> Result<()>
@@ -247,6 +282,7 @@ impl KvStore {
             self.enforce_memory_limit()?;
         }
 
+        self.emit_keyspace_event(KeyspaceEventKind::Set, key.clone());
         debug!("Set key '{}' with TTL {:?}", key, ttl);
         Ok(())
     }
@@ -283,6 +319,7 @@ impl KvStore {
             self.enforce_memory_limit()?;
         }
 
+        self.emit_keyspace_event(KeyspaceEventKind::Set, key.clone());
         debug!("Set key '{}'", key);
         Ok(())
     }
@@ -341,6 +378,7 @@ impl KvStore {
         let result = self.store.remove(key).map(|v| v.value);
         if result.is_some() {
             self.stats.total_deletes += 1;
+            self.emit_keyspace_event(KeyspaceEventKind::Delete, key.to_string());
         }
         result
     }
@@ -734,6 +772,7 @@ impl KvStore {
         let count = expired.len();
         for key in expired {
             self.store.remove(&key);
+            self.emit_keyspace_event(KeyspaceEventKind::Expired, key);
         }
 
         self.stats.expired_keys += count;
@@ -1031,6 +1070,7 @@ impl KvStore {
                     self.stats.memory_bytes = self.stats.memory_bytes.saturating_sub(value_size);
                     self.stats.evictions += 1;
                     self.stats.total_keys = self.store.len();
+                    self.emit_keyspace_event(KeyspaceEventKind::Evicted, lru_key.clone());
                 }
                 self.lru_order.remove(0);
             } else {
@@ -1049,6 +1089,37 @@ impl KvStore {
     pub fn set_config(&mut self, config: StoreConfig) {
         info!("Updating KvStore configuration");
         self.config = config;
+    }
+
+    /// Emit a keyspace event if notifications are enabled
+    fn emit_keyspace_event(&mut self, kind: KeyspaceEventKind, key: String) {
+        if !self.config.keyspace_notifications_enabled {
+            return;
+        }
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.pending_keyspace_events.push(KeyspaceEvent {
+            kind,
+            key,
+            timestamp,
+        });
+    }
+
+    /// Drain all pending keyspace events (returns and clears the queue)
+    pub fn drain_keyspace_events(&mut self) -> Vec<KeyspaceEvent> {
+        std::mem::take(&mut self.pending_keyspace_events)
+    }
+
+    /// Check if keyspace notifications are enabled
+    pub fn keyspace_notifications_enabled(&self) -> bool {
+        self.config.keyspace_notifications_enabled
+    }
+
+    /// Enable or disable keyspace notifications
+    pub fn set_keyspace_notifications_enabled(&mut self, enabled: bool) {
+        self.config.keyspace_notifications_enabled = enabled;
     }
 
     /// Start a transaction (MULTI command)
