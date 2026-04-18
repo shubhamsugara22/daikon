@@ -761,7 +761,7 @@ impl KvStore {
             .iter()
             .filter_map(|(k, v)| {
                 if let Some(exp) = v.expires_at {
-                    if now > exp {
+                    if now >= exp {
                         return Some(k.clone());
                     }
                 }

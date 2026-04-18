@@ -15,6 +15,7 @@ An in-memory key-value store written in Rust with a CLI and an HTTP API (actix-w
 - **Transactions** — MULTI/EXEC/DISCARD with queued writes
 - **LRU eviction** — configurable memory cap with least-recently-used eviction
 - **Auth** — optional API-key gating on mutating endpoints
+- **Keyspace notifications** — Redis-style event channels for key mutations and expirations
 - **Observability** — Prometheus-style `/api/metrics`, health probes, access logging
 
 ## Quick start
@@ -118,6 +119,7 @@ All settings are via environment variables. Defaults are shown.
 | `KV_REPLICA_ID` | auto | Replica identifier |
 | `KV_REPLICATION_POLL_INTERVAL` | `5` | Sync poll interval (seconds) |
 | `KV_REPLICATION_SECRET` | _(none)_ | Replication bearer token |
+| `KV_KEYSPACE_NOTIFICATIONS` | `false` | Enable keyspace event notifications |
 | `RUST_LOG` | `info` | Log level (tracing) |
 
 ## Docker
@@ -156,6 +158,48 @@ benches/
 ## License
 
 MIT
+
+## Keyspace Notifications
+
+Redis-style keyspace notifications publish events when keys are mutated or expire.
+
+### Enable
+
+```bash
+KV_KEYSPACE_NOTIFICATIONS=true cargo run --bin server
+```
+
+Or at runtime:
+
+```bash
+curl -X PUT http://localhost:8080/api/keyspace/config \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+
+curl http://localhost:8080/api/keyspace/config
+```
+
+### Channels
+
+| Channel pattern | Message | Fired on |
+| --- | --- | --- |
+| `__keyevent__:set` | key name | `SET` / `SET` with TTL |
+| `__keyevent__:del` | key name | `DELETE` |
+| `__keyevent__:expired` | key name | TTL expiration cleanup |
+| `__keyevent__:evicted` | key name | LRU eviction |
+| `__keyspace__:{key}` | event kind (`set`, `del`, `expired`, `evicted`) | any mutation on that key |
+
+Subscribe via the existing Pub/Sub poll endpoint:
+
+```bash
+# Subscribe to all set events
+curl -X POST http://localhost:8080/api/pubsub/subscribe \
+  -H "Content-Type: application/json" \
+  -d '{"channel": "__keyevent__:set", "subscriber_id": "watcher"}'
+
+# Poll for events
+curl http://localhost:8080/api/pubsub/poll/watcher
+```
 
 ## Phase 1: Production Readiness ✅
 
