@@ -180,13 +180,23 @@ async fn main() -> std::io::Result<()> {
     };
 
     // Replay WAL entries to ensure durability
-    let kv_store = match replay_wal(&wal, kv_store) {
+    let mut kv_store = match replay_wal(&wal, kv_store) {
         Ok(store) => store,
         Err(e) => {
             error!("Failed to replay WAL: {}", e);
             return Err(std::io::Error::other(format!("WAL replay failed: {}", e)));
         }
     };
+
+    // Keyspace notifications
+    let keyspace_notifications_enabled = env::var("KV_KEYSPACE_NOTIFICATIONS")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if keyspace_notifications_enabled {
+        kv_store.set_keyspace_notifications_enabled(true);
+        info!("Keyspace notifications ENABLED");
+    }
 
     let store = Arc::new(RwLock::new(kv_store));
     let store_for_shutdown = Arc::clone(&store);
@@ -431,7 +441,10 @@ async fn main() -> std::io::Result<()> {
                 .route("/list/{key}/lrange", web::get().to(api::list_lrange))
                 .route("/list/{key}/llen", web::get().to(api::list_llen))
                 // Pipeline
-                .route("/pipeline", web::post().to(api::pipeline_exec)),
+                .route("/pipeline", web::post().to(api::pipeline_exec))
+                // Keyspace notifications config
+                .route("/keyspace/config", web::get().to(api::get_keyspace_config))
+                .route("/keyspace/config", web::put().to(api::set_keyspace_config)),
         )
     })
     .max_connections(max_connections);

@@ -1,6 +1,8 @@
 use actix_web::{test as awtest, web, App};
 use parking_lot::RwLock;
-use rust_kv_store::{api, kv_store::KvStore, pitr::Pitr, replication::ReplicationStatus, wal::Wal};
+use rust_kv_store::{
+    api, kv_store::KvStore, pitr::Pitr, pubsub::PubSub, replication::ReplicationStatus, wal::Wal,
+};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -325,6 +327,7 @@ async fn test_api_set_value_supports_ttl() {
         App::new()
             .app_data(web::Data::from(Arc::clone(&store)))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .service(
                 web::scope("/api")
                     .route("/keys/{key}", web::put().to(api::set_value))
@@ -357,6 +360,7 @@ async fn test_api_write_auth_enforced_when_api_key_configured() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .app_data(web::Data::new(api::ApiRuntimeConfig {
                 api_key: Some("secret".to_string()),
                 lua_enabled: true,
@@ -450,6 +454,7 @@ async fn test_api_pipeline_basic_set_get() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
     )
     .await;
@@ -499,6 +504,7 @@ async fn test_api_pipeline_mixed_ops() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
     )
     .await;
@@ -540,6 +546,7 @@ async fn test_api_pipeline_list_ops() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
     )
     .await;
@@ -582,6 +589,7 @@ async fn test_api_pipeline_empty_rejected() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
     )
     .await;
@@ -604,6 +612,7 @@ async fn test_api_pipeline_auth_required() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .app_data(web::Data::new(api::ApiRuntimeConfig {
                 api_key: Some("secret".to_string()),
                 lua_enabled: false,
@@ -651,6 +660,7 @@ async fn test_api_pipeline_error_mid_batch() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
     )
     .await;
@@ -688,6 +698,7 @@ async fn test_api_pipeline_append_and_getset() {
         App::new()
             .app_data(web::Data::from(store))
             .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
             .service(web::scope("/api").route("/pipeline", web::post().to(api::pipeline_exec))),
     )
     .await;

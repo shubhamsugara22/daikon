@@ -249,9 +249,9 @@ fn publish_keyspace_events(store: &mut KvStore, pubsub: &PubSub) {
     for event in events {
         let kind_str = event.kind.to_string();
         // __keyevent__:<event> channel — message is the key name
-        pubsub.publish(&format!("__keyevent__:{}", kind_str), &event.key);
+        let _ = pubsub.publish(format!("__keyevent__:{}", kind_str), event.key.clone());
         // __keyspace__:<key> channel — message is the event type
-        pubsub.publish(&format!("__keyspace__:{}", event.key), &kind_str);
+        let _ = pubsub.publish(format!("__keyspace__:{}", event.key), kind_str);
     }
 }
 
@@ -283,6 +283,7 @@ pub async fn set_value(
     http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    pubsub: WebPubSub,
     runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
     req: web::Json<SetRequest>,
@@ -326,6 +327,8 @@ pub async fn set_value(
         store.set(key.to_string(), req.value.clone())
     };
 
+    publish_keyspace_events(&mut store, &pubsub);
+
     match result {
         Ok(_) => HttpResponse::Ok().body(format!("Set '{}' successfully", key)),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
@@ -337,6 +340,7 @@ pub async fn delete_value(
     http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    pubsub: WebPubSub,
     runtime: Option<web::Data<ApiRuntimeConfig>>,
     key: web::Path<String>,
 ) -> impl Responder {
@@ -354,10 +358,12 @@ pub async fn delete_value(
     }
 
     let mut store = store.write(); // Write lock - exclusive access for mutation
-    match store.delete(&key) {
+    let result = match store.delete(&key) {
         Some(_) => HttpResponse::Ok().body(format!("Deleted '{}' successfully", key)),
         None => HttpResponse::NotFound().body(format!("Key '{}' not found", key)),
-    }
+    };
+    publish_keyspace_events(&mut store, &pubsub);
+    result
 }
 
 // GET /api/keys
@@ -605,6 +611,7 @@ pub async fn get_stats(store: WebKvStore) -> impl Responder {
 pub async fn cleanup_expired(
     http_req: HttpRequest,
     store: WebKvStore,
+    pubsub: WebPubSub,
     runtime: Option<web::Data<ApiRuntimeConfig>>,
 ) -> impl Responder {
     if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
@@ -613,6 +620,7 @@ pub async fn cleanup_expired(
 
     let mut store = store.write(); // Write lock
     let removed = store.cleanup_expired();
+    publish_keyspace_events(&mut store, &pubsub);
     HttpResponse::Ok().json(removed)
 }
 // POST /api/multi
@@ -1225,6 +1233,7 @@ pub async fn pipeline_exec(
     http_req: HttpRequest,
     store: WebKvStore,
     wal: WebWal,
+    pubsub: WebPubSub,
     runtime: Option<web::Data<ApiRuntimeConfig>>,
     req: web::Json<PipelineRequest>,
 ) -> impl Responder {
@@ -1607,7 +1616,49 @@ pub async fn pipeline_exec(
         results.push(result);
     }
 
+    publish_keyspace_events(&mut store, &pubsub);
     HttpResponse::Ok().json(PipelineResponse { results })
+}
+
+// ===== Keyspace Notifications Config =====
+
+// GET /api/keyspace/config
+pub async fn get_keyspace_config(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
+    let store = store.read();
+    HttpResponse::Ok().json(serde_json::json!({
+        "keyspace_notifications_enabled": store.keyspace_notifications_enabled()
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct KeyspaceConfigRequest {
+    pub enabled: bool,
+}
+
+// PUT /api/keyspace/config
+pub async fn set_keyspace_config(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    req: web::Json<KeyspaceConfigRequest>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
+    let mut store = store.write();
+    store.set_keyspace_notifications_enabled(req.enabled);
+    HttpResponse::Ok().json(serde_json::json!({
+        "keyspace_notifications_enabled": req.enabled
+    }))
 }
 
 // ===== List Operation Handlers =====

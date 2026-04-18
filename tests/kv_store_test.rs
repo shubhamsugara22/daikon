@@ -1,6 +1,6 @@
 use rust_kv_store::config::StoreConfig;
 use rust_kv_store::error::KvStoreError;
-use rust_kv_store::kv_store::{KvStore, Value};
+use rust_kv_store::kv_store::{KeyspaceEvent, KeyspaceEventKind, KvStore, Value};
 use rust_kv_store::pubsub::PubSub;
 use std::env;
 use std::fs;
@@ -951,4 +951,235 @@ fn test_list_type_mismatch_on_string_key() {
         store.llen("strkey"),
         Err(KvStoreError::TypeMismatch { .. })
     ));
+}
+
+// ── Keyspace notification tests ──
+
+#[test]
+fn test_keyspace_events_disabled_by_default() {
+    let mut store = KvStore::new();
+    assert!(!store.keyspace_notifications_enabled());
+    store.set("a".to_string(), "1".to_string()).unwrap();
+    let events = store.drain_keyspace_events();
+    assert!(events.is_empty(), "no events when notifications disabled");
+}
+
+#[test]
+fn test_keyspace_events_set_emits_event() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+
+    store.set("mykey".to_string(), "val".to_string()).unwrap();
+
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, KeyspaceEventKind::Set);
+    assert_eq!(events[0].key, "mykey");
+    assert!(events[0].timestamp > 0);
+}
+
+#[test]
+fn test_keyspace_events_delete_emits_event() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+
+    store.set("delme".to_string(), "val".to_string()).unwrap();
+    store.drain_keyspace_events(); // clear the set event
+
+    store.delete("delme").unwrap();
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, KeyspaceEventKind::Delete);
+    assert_eq!(events[0].key, "delme");
+}
+
+#[test]
+fn test_keyspace_events_expired_emits_event() {
+    use std::time::Duration;
+
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+
+    // Set a key with a 0-second TTL so it expires immediately
+    store
+        .set_with_ttl(
+            "ttlkey".to_string(),
+            "val".to_string(),
+            Duration::from_secs(0),
+        )
+        .unwrap();
+    store.drain_keyspace_events(); // clear the set event
+
+    // Wait briefly then run cleanup
+    std::thread::sleep(Duration::from_millis(50));
+    let cleaned = store.cleanup_expired();
+    assert!(cleaned > 0, "key should have been cleaned up");
+
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, KeyspaceEventKind::Expired);
+    assert_eq!(events[0].key, "ttlkey");
+}
+
+#[test]
+fn test_keyspace_events_drain_clears_queue() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+
+    store.set("a".to_string(), "1".to_string()).unwrap();
+    store.set("b".to_string(), "2".to_string()).unwrap();
+
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 2);
+
+    // Second drain should be empty
+    let events2 = store.drain_keyspace_events();
+    assert!(events2.is_empty(), "drain should clear the queue");
+}
+
+#[test]
+fn test_keyspace_events_toggle_enabled() {
+    let mut store = KvStore::new();
+    assert!(!store.keyspace_notifications_enabled());
+
+    store.set_keyspace_notifications_enabled(true);
+    assert!(store.keyspace_notifications_enabled());
+
+    store.set("a".to_string(), "1".to_string()).unwrap();
+    assert_eq!(store.drain_keyspace_events().len(), 1);
+
+    // Disable and verify no events
+    store.set_keyspace_notifications_enabled(false);
+    store.set("b".to_string(), "2".to_string()).unwrap();
+    assert!(store.drain_keyspace_events().is_empty());
+}
+
+#[test]
+fn test_keyspace_events_multiple_ops_ordered() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+
+    store.set("x".to_string(), "1".to_string()).unwrap();
+    store.set("y".to_string(), "2".to_string()).unwrap();
+    store.delete("x").unwrap();
+
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].kind, KeyspaceEventKind::Set);
+    assert_eq!(events[0].key, "x");
+    assert_eq!(events[1].kind, KeyspaceEventKind::Set);
+    assert_eq!(events[1].key, "y");
+    assert_eq!(events[2].kind, KeyspaceEventKind::Delete);
+    assert_eq!(events[2].key, "x");
+}
+
+#[test]
+fn test_keyspace_event_kind_display() {
+    assert_eq!(format!("{}", KeyspaceEventKind::Set), "set");
+    assert_eq!(format!("{}", KeyspaceEventKind::Delete), "del");
+    assert_eq!(format!("{}", KeyspaceEventKind::Expired), "expired");
+    assert_eq!(format!("{}", KeyspaceEventKind::Evicted), "evicted");
+}
+
+// ── Keyspace notification tests ──
+
+#[test]
+fn test_keyspace_events_disabled_by_default() {
+    let store = KvStore::new();
+    assert!(!store.keyspace_notifications_enabled());
+}
+
+#[test]
+fn test_keyspace_events_toggle() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+    assert!(store.keyspace_notifications_enabled());
+    store.set_keyspace_notifications_enabled(false);
+    assert!(!store.keyspace_notifications_enabled());
+}
+
+#[test]
+fn test_keyspace_event_on_set() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+    store.set("foo".to_string(), "bar".to_string()).unwrap();
+
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0].kind, KeyspaceEventKind::Set));
+    assert_eq!(events[0].key, "foo");
+}
+
+#[test]
+fn test_keyspace_event_on_delete() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+    store.set("foo".to_string(), "bar".to_string()).unwrap();
+    store.drain_keyspace_events(); // clear set event
+    store.delete("foo").unwrap();
+
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0].kind, KeyspaceEventKind::Delete));
+    assert_eq!(events[0].key, "foo");
+}
+
+#[test]
+fn test_keyspace_event_on_expired() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+    store
+        .set_with_ttl("temp".to_string(), "val".to_string(), 0)
+        .unwrap();
+    store.drain_keyspace_events(); // clear set event
+
+    // Force cleanup
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    store.cleanup_expired();
+
+    let events = store.drain_keyspace_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind == KeyspaceEventKind::Expired && e.key == "temp"),
+        "expected an Expired event for 'temp', got: {:?}",
+        events
+    );
+}
+
+#[test]
+fn test_keyspace_no_events_when_disabled() {
+    let mut store = KvStore::new();
+    // notifications disabled by default
+    store.set("foo".to_string(), "bar".to_string()).unwrap();
+    store.delete("foo").unwrap();
+
+    let events = store.drain_keyspace_events();
+    assert!(
+        events.is_empty(),
+        "no events should be emitted when disabled"
+    );
+}
+
+#[test]
+fn test_keyspace_drain_clears_events() {
+    let mut store = KvStore::new();
+    store.set_keyspace_notifications_enabled(true);
+    store.set("a".to_string(), "1".to_string()).unwrap();
+    store.set("b".to_string(), "2".to_string()).unwrap();
+
+    let events = store.drain_keyspace_events();
+    assert_eq!(events.len(), 2);
+
+    // Second drain should be empty
+    let events2 = store.drain_keyspace_events();
+    assert!(events2.is_empty());
+}
+
+#[test]
+fn test_keyspace_event_kind_display() {
+    assert_eq!(format!("{}", KeyspaceEventKind::Set), "set");
+    assert_eq!(format!("{}", KeyspaceEventKind::Delete), "del");
+    assert_eq!(format!("{}", KeyspaceEventKind::Expired), "expired");
+    assert_eq!(format!("{}", KeyspaceEventKind::Evicted), "evicted");
 }
