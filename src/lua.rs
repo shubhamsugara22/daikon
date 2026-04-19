@@ -20,7 +20,7 @@ pub fn execute_script(store: &mut KvStore, wal: Option<&Wal>, script: &str) -> R
             Ok(value)
         })?;
         globals.set("get", get_fn)?;
-    
+
         let store_for_set = Rc::clone(&store_ref);
         let set_fn = scope.create_function_mut(move |_, (key, value): (String, String)| {
             if let Some(wal) = wal {

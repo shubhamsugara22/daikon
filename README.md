@@ -106,6 +106,7 @@ All settings are via environment variables. Defaults are shown.
 | `KV_WAL_PATH` | `server.wal` | Write-ahead log path |
 | `KV_SNAPSHOTS_DIR` | `snapshots` | Snapshot directory |
 | `KV_SNAPSHOT_INTERVAL_SECS` | `0` (disabled) | Auto-snapshot interval |
+| `KV_TTL_CLEANUP_INTERVAL_SECS` | `0` (disabled) | Background expired-key cleanup interval |
 | `KV_SNAPSHOT_COMPRESSION` | `none` | Snapshot compression: `none`, `gzip`, `zstd` |
 | `KV_API_KEY` | _(none)_ | API key for mutating endpoints (`x-api-key` or `Bearer`) |
 | `KV_ENABLE_LUA` | `true` | Enable/disable Lua over HTTP |
@@ -167,6 +168,12 @@ Redis-style keyspace notifications publish events when keys are mutated or expir
 
 ```bash
 KV_KEYSPACE_NOTIFICATIONS=true cargo run --bin server
+```
+
+To proactively remove expired keys in the background (instead of only on reads/manual cleanup), set:
+
+```bash
+KV_TTL_CLEANUP_INTERVAL_SECS=5 cargo run --bin server
 ```
 
 Or at runtime:

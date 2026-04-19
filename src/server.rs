@@ -39,6 +39,10 @@ async fn main() -> std::io::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let ttl_cleanup_interval_secs: u64 = env::var("KV_TTL_CLEANUP_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let api_key = env::var("KV_API_KEY")
         .ok()
         .filter(|value| !value.is_empty());
@@ -234,6 +238,44 @@ async fn main() -> std::io::Result<()> {
         });
     } else {
         info!("Automatic snapshots DISABLED (set KV_SNAPSHOT_INTERVAL_SECS > 0 to enable)");
+    }
+
+    if ttl_cleanup_interval_secs > 0 {
+        info!(
+            "Background TTL cleanup ENABLED every {}s (KV_TTL_CLEANUP_INTERVAL_SECS)",
+            ttl_cleanup_interval_secs
+        );
+
+        let store_for_ttl_cleanup = Arc::clone(&store);
+        let pubsub_for_ttl_cleanup = Arc::clone(&pubsub);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(ttl_cleanup_interval_secs));
+            // Consume the immediate first tick so cleanup starts after the interval.
+            interval.tick().await;
+
+            loop {
+                interval.tick().await;
+
+                let expired_count = {
+                    let mut store_guard = store_for_ttl_cleanup.write();
+                    let expired = store_guard.cleanup_expired();
+                    if expired > 0 {
+                        publish_keyspace_events(&mut store_guard, &pubsub_for_ttl_cleanup);
+                    }
+                    expired
+                };
+
+                if expired_count > 0 {
+                    info!(
+                        "Background TTL cleanup removed {} expired key(s)",
+                        expired_count
+                    );
+                }
+            }
+        });
+    } else {
+        info!("Background TTL cleanup DISABLED (set KV_TTL_CLEANUP_INTERVAL_SECS > 0 to enable)");
     }
 
     // Initialize replica if in replica mode
@@ -478,6 +520,19 @@ async fn main() -> std::io::Result<()> {
     });
 
     server.await
+}
+
+/// Drain pending keyspace events from the store and publish them to PubSub channels.
+/// Publishes to both `__keyevent__:{kind}` (message = key) and `__keyspace__:{key}` (message = kind).
+fn publish_keyspace_events(store: &mut KvStore, pubsub: &PubSub) {
+    let events = store.drain_keyspace_events();
+    for event in events {
+        let kind_str = event.kind.to_string();
+        // __keyevent__:<event> channel — message is the key name
+        let _ = pubsub.publish(format!("__keyevent__:{}", kind_str), event.key.clone());
+        // __keyspace__:<key> channel — message is the event type
+        let _ = pubsub.publish(format!("__keyspace__:{}", event.key), kind_str);
+    }
 }
 
 /// Replay WAL entries to restore durability

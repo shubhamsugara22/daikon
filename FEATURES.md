@@ -328,11 +328,11 @@ cargo run -- stats
 - **Atomic Operations**: Thread-safe increment/decrement without race conditions
 - **Pattern Matching**: Efficient key discovery without scanning all keys
 - **Manual Cleanup**: On-demand expired key removal
+- **Background TTL Cleanup**: Optional periodic expiration sweep via `KV_TTL_CLEANUP_INTERVAL_SECS`
 
 ## What's Next?
 
 Potential future enhancements:
 
-- List, Set, and Hash data types
+- Set and Hash data types
 - Stream/time-series data type
-- Background TTL cleanup task
