@@ -148,3 +148,51 @@ mod tests {
         assert_eq!(output, "true 1");
     }
 }
+        let mut store = KvStore::new();
+        let output = execute_script(
+            &mut store,
+            None,
+            "set('counter', '1'); local v = get('counter'); return v",
+        )
+        .expect("lua script failed");
+
+        assert_eq!(output, "1");
+        assert_eq!(store.get("counter"), Some(&Value::Str("1".to_string())));
+    }
+
+    #[test]
+    fn test_lua_incr_and_exists() {
+        let mut store = KvStore::new();
+        // Pre-seed key as Value::Int so incr can operate on it
+        store.set("n".to_string(), 0i64).expect("seed set failed");
+        let output = execute_script(&mut store, None, "incr('n'); return exists('n'), get('n')")
+            .expect("lua script failed");
+
+        assert_eq!(output, "true 1");
+    }
+
+    #[test]
+    fn test_lua_setex_with_positive_ttl() {
+        let mut store = KvStore::new();
+
+        let output = execute_script(
+            &mut store,
+            None,
+            "setex('session', 'abc123', 60); return exists('session'), get('session')",
+        )
+        .expect("lua script failed");
+
+        assert_eq!(output, "true abc123");
+    }
+
+    #[test]
+    fn test_lua_setex_zero_ttl_expires_on_cleanup() {
+        let mut store = KvStore::new();
+
+        execute_script(&mut store, None, "setex('temp', 'v', 0)").expect("lua script failed");
+
+        let cleaned = store.cleanup_expired();
+        assert_eq!(cleaned, 1);
+        assert!(!store.exists("temp"));
+    }
+}
