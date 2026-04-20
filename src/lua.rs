@@ -4,6 +4,7 @@ use crate::wal::{Wal, WalEntry, WalOperation};
 use mlua::{Lua, MultiValue, Value as LuaValue};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 pub fn execute_script(store: &mut KvStore, wal: Option<&Wal>, script: &str) -> Result<String> {
     let lua = Lua::new();
@@ -40,6 +41,29 @@ pub fn execute_script(store: &mut KvStore, wal: Option<&Wal>, script: &str) -> R
             Ok(true)
         })?;
         globals.set("set", set_fn)?;
+
+        let store_for_setex = Rc::clone(&store_ref);
+        let setex_fn = scope.create_function_mut(
+            move |_, (key, value, ttl_secs): (String, String, u64)| {
+                if let Some(wal) = wal {
+                    let entry = WalEntry::new(WalOperation::Set {
+                        key: key.clone(),
+                        value: serde_json::to_string(&Value::Str(value.clone()))
+                            .unwrap_or_else(|_| format!("\"{}\"", value)),
+                        ttl_secs: Some(ttl_secs),
+                    });
+                    wal.append(&entry)
+                        .map_err(|e| mlua::Error::external(e.to_string()))?;
+                }
+
+                let mut store = store_for_setex.borrow_mut();
+                store
+                    .set_with_ttl(key, value, Duration::from_secs(ttl_secs))
+                    .map_err(|e| mlua::Error::external(e.to_string()))?;
+                Ok(true)
+            },
+        )?;
+        globals.set("setex", setex_fn)?;
 
         let store_for_delete = Rc::clone(&store_ref);
         let del_fn = scope.create_function_mut(move |_, key: String| {
@@ -125,29 +149,6 @@ mod tests {
 
     #[test]
     fn test_lua_read_write_script() {
-        let mut store = KvStore::new();
-        let output = execute_script(
-            &mut store,
-            None,
-            "set('counter', '1'); local v = get('counter'); return v",
-        )
-        .expect("lua script failed");
-
-        assert_eq!(output, "1");
-        assert_eq!(store.get("counter"), Some(&Value::Str("1".to_string())));
-    }
-
-    #[test]
-    fn test_lua_incr_and_exists() {
-        let mut store = KvStore::new();
-        // Pre-seed key as Value::Int so incr can operate on it
-        store.set("n".to_string(), 0i64).expect("seed set failed");
-        let output = execute_script(&mut store, None, "incr('n'); return exists('n'), get('n')")
-            .expect("lua script failed");
-
-        assert_eq!(output, "true 1");
-    }
-}
         let mut store = KvStore::new();
         let output = execute_script(
             &mut store,
