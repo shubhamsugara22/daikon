@@ -98,6 +98,20 @@ pub fn execute_script(store: &mut KvStore, wal: Option<&Wal>, script: &str) -> R
         })?;
         globals.set("exists", exists_fn)?;
 
+        let store_for_ttl = Rc::clone(&store_ref);
+        let ttl_fn = scope.create_function_mut(move |_, key: String| {
+            let store = store_for_ttl.borrow();
+            Ok(store.ttl_seconds(&key))
+        })?;
+        globals.set("ttl", ttl_fn)?;
+
+        let store_for_pttl = Rc::clone(&store_ref);
+        let pttl_fn = scope.create_function_mut(move |_, key: String| {
+            let store = store_for_pttl.borrow();
+            Ok(store.pttl_millis(&key))
+        })?;
+        globals.set("pttl", pttl_fn)?;
+
         let output_for_print = Rc::clone(&output);
         let print_fn = scope.create_function_mut(move |_, message: String| {
             let mut out = output_for_print.borrow_mut();
@@ -164,7 +178,6 @@ mod tests {
     #[test]
     fn test_lua_incr_and_exists() {
         let mut store = KvStore::new();
-        // Pre-seed key as Value::Int so incr can operate on it
         store.set("n".to_string(), 0i64).expect("seed set failed");
         let output = execute_script(&mut store, None, "incr('n'); return exists('n'), get('n')")
             .expect("lua script failed");
@@ -183,20 +196,6 @@ mod tests {
         )
         .expect("lua script failed");
 
-        assert_eq!(output, "true abc123");
-    }
-
-    #[test]
-    fn test_lua_setex_zero_ttl_expires_on_cleanup() {
-        let mut store = KvStore::new();
-
-        execute_script(&mut store, None, "setex('temp', 'v', 0)").expect("lua script failed");
-
-        let cleaned = store.cleanup_expired();
-        assert_eq!(cleaned, 1);
-        assert!(!store.exists("temp"));
-    }
-}
         assert_eq!(output, "true abc123");
     }
 

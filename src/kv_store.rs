@@ -533,6 +533,48 @@ impl KvStore {
         self.get(key).is_some()
     }
 
+    /// Return remaining TTL in seconds for a key.
+    ///
+    /// Semantics follow Redis:
+    /// - `-2` => key does not exist (or is expired)
+    /// - `-1` => key exists but has no expiration
+    /// - `>=0` => remaining TTL in seconds
+    pub fn ttl_seconds(&self, key: &str) -> i64 {
+        let Some(entry) = self.store.get(key) else {
+            return -2;
+        };
+
+        let Some(exp) = entry.expires_at else {
+            return -1;
+        };
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if now > exp {
+            -2
+        } else {
+            (exp - now).min(i64::MAX as u64) as i64
+        }
+    }
+
+    /// Return remaining TTL in milliseconds for a key.
+    ///
+    /// Semantics follow Redis:
+    /// - `-2` => key does not exist (or is expired)
+    /// - `-1` => key exists but has no expiration
+    /// - `>=0` => remaining TTL in milliseconds
+    pub fn pttl_millis(&self, key: &str) -> i64 {
+        let ttl_secs = self.ttl_seconds(key);
+        if ttl_secs < 0 {
+            ttl_secs
+        } else {
+            ttl_secs.saturating_mul(1000)
+        }
+    }
+
     /// Check if multiple keys exist. Returns count of existing keys.
     pub fn exists_many(&self, keys: &[String]) -> usize {
         keys.iter().filter(|k| self.exists(k)).count()
@@ -1444,48 +1486,6 @@ impl KvStore {
     pub fn queue_operation(&mut self, op: TransactionOp) -> Result<()> {
         match &mut self.transaction_queue {
             Some(queue) => {
-                queue.push(op);
-                Ok(())
-            }
-            None => Err(KvStoreError::OperationFailed(
-                "No transaction in progress".to_string(),
-            )),
-        }
-    }
-
-    /// Check if currently in a transaction
-    pub fn in_transaction(&self) -> bool {
-        self.transaction_queue.is_some()
-    }
-}
-
-// Helper function for simple glob pattern matching
-fn matches_glob(text: &str, pattern: &str) -> bool {
-    let text_chars: Vec<char> = text.chars().collect();
-    let pattern_chars: Vec<char> = pattern.chars().collect();
-
-    fn match_recursive(text: &[char], pattern: &[char], ti: usize, pi: usize) -> bool {
-        if pi == pattern.len() {
-            return ti == text.len();
-        }
-
-        if pattern[pi] == '*' {
-            // Match zero or more characters
-            for i in ti..=text.len() {
-                if match_recursive(text, pattern, i, pi + 1) {
-                    return true;
-                }
-            }
-            false
-        } else if ti < text.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
-            match_recursive(text, pattern, ti + 1, pi + 1)
-        } else {
-            false
-        }
-    }
-
-    match_recursive(&text_chars, &pattern_chars, 0, 0)
-}
                 queue.push(op);
                 Ok(())
             }
