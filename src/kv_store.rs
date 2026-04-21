@@ -1486,3 +1486,45 @@ fn matches_glob(text: &str, pattern: &str) -> bool {
 
     match_recursive(&text_chars, &pattern_chars, 0, 0)
 }
+                queue.push(op);
+                Ok(())
+            }
+            None => Err(KvStoreError::OperationFailed(
+                "No transaction in progress".to_string(),
+            )),
+        }
+    }
+
+    /// Check if currently in a transaction
+    pub fn in_transaction(&self) -> bool {
+        self.transaction_queue.is_some()
+    }
+}
+
+// Helper function for simple glob pattern matching
+fn matches_glob(text: &str, pattern: &str) -> bool {
+    let text_chars: Vec<char> = text.chars().collect();
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+
+    fn match_recursive(text: &[char], pattern: &[char], ti: usize, pi: usize) -> bool {
+        if pi == pattern.len() {
+            return ti == text.len();
+        }
+
+        if pattern[pi] == '*' {
+            // Match zero or more characters
+            for i in ti..=text.len() {
+                if match_recursive(text, pattern, i, pi + 1) {
+                    return true;
+                }
+            }
+            false
+        } else if ti < text.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
+            match_recursive(text, pattern, ti + 1, pi + 1)
+        } else {
+            false
+        }
+    }
+
+    match_recursive(&text_chars, &pattern_chars, 0, 0)
+}

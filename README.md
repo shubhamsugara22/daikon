@@ -55,6 +55,7 @@ cargo run -- pf-count visitors
 # Lua
 cargo run -- lua --script "set('x','hello'); return get('x')"
 cargo run -- lua --script "setex('session','token',300); return get('session')"
+cargo run -- lua --script "setex('session','token',300); return ttl('session'), pttl('session')"
 
 # Persistence
 cargo run -- save --versions 3

@@ -197,3 +197,45 @@ mod tests {
         assert!(!store.exists("temp"));
     }
 }
+        assert_eq!(output, "true abc123");
+    }
+
+    #[test]
+    fn test_lua_setex_zero_ttl_expires_on_cleanup() {
+        let mut store = KvStore::new();
+
+        execute_script(&mut store, None, "setex('temp', 'v', 0)").expect("lua script failed");
+
+        let cleaned = store.cleanup_expired();
+        assert_eq!(cleaned, 1);
+        assert!(!store.exists("temp"));
+    }
+
+    #[test]
+    fn test_lua_ttl_and_pttl_for_expiring_key() {
+        let mut store = KvStore::new();
+
+        let output = execute_script(
+            &mut store,
+            None,
+            "setex('session', 'abc123', 60); return ttl('session') >= 0, pttl('session') > 0",
+        )
+        .expect("lua script failed");
+
+        assert_eq!(output, "true true");
+    }
+
+    #[test]
+    fn test_lua_ttl_and_pttl_missing_and_persistent_keys() {
+        let mut store = KvStore::new();
+
+        let output = execute_script(
+            &mut store,
+            None,
+            "set('k', 'v'); return ttl('missing'), pttl('missing'), ttl('k'), pttl('k')",
+        )
+        .expect("lua script failed");
+
+        assert_eq!(output, "-2 -2 -1 -1");
+    }
+}
