@@ -78,6 +78,18 @@ curl -X PUT http://localhost:8080/api/keys/mykey \
 # Read
 curl http://localhost:8080/api/keys/mykey
 
+# TTL inspection (Redis-compatible: -2 = missing/expired, -1 = no TTL, >=0 = seconds remaining)
+curl http://localhost:8080/api/ttl/mykey
+curl http://localhost:8080/api/pttl/mykey          # milliseconds variant
+
+# Set / update TTL on an existing key
+curl -X PUT http://localhost:8080/api/expire/mykey \
+  -H "Content-Type: application/json" \
+  -d '{"ttl_secs": 3600}'
+
+# Remove TTL (persist the key forever)
+curl -X DELETE http://localhost:8080/api/expire/mykey
+
 # Atomic increment
 curl -X POST http://localhost:8080/api/incr/counter
 
