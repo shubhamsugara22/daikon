@@ -482,6 +482,12 @@ impl ReplicationReplica {
             WalOperation::RPop { key } => {
                 let _ = store.rpop(key);
             }
+            WalOperation::Expire { key, ttl_secs } => {
+                store.expire(key, std::time::Duration::from_secs(*ttl_secs));
+            }
+            WalOperation::Persist { key } => {
+                store.persist(key);
+            }
         }
 
         // Also append to local WAL for persistence

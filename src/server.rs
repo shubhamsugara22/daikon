@@ -633,6 +633,12 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
             WalOperation::RPop { key } => {
                 let _ = store.rpop(key);
             }
+            WalOperation::Expire { key, ttl_secs } => {
+                store.expire(key, std::time::Duration::from_secs(*ttl_secs));
+            }
+            WalOperation::Persist { key } => {
+                store.persist(key);
+            }
         }
     }
 
