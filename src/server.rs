@@ -404,6 +404,11 @@ async fn main() -> std::io::Result<()> {
                 .route("/mget", web::post().to(api::mget_values))
                 .route("/mset", web::post().to(api::mset_values))
                 .route("/exists/{key}", web::get().to(api::exists_key))
+                // TTL introspection & mutation
+                .route("/ttl/{key}", web::get().to(api::get_ttl))
+                .route("/pttl/{key}", web::get().to(api::get_pttl))
+                .route("/expire/{key}", web::put().to(api::set_expire))
+                .route("/expire/{key}", web::delete().to(api::persist_key))
                 // Pattern matching & stats
                 .route("/keys/pattern/{pattern}", web::get().to(api::keys_pattern))
                 .route("/stats", web::get().to(api::get_stats))

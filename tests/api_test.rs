@@ -727,3 +727,244 @@ async fn test_api_pipeline_append_and_getset() {
     assert_eq!(results[4]["value"], "replaced");
     assert_eq!(results[5]["value"], serde_json::json!(["replaced", null]));
 }
+
+// ── TTL / PTTL / EXPIRE / PERSIST endpoint tests ─────────────────────────────
+
+#[actix_web::test]
+async fn test_api_get_ttl_returns_minus_two_for_missing_key() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .service(web::scope("/api").route("/ttl/{key}", web::get().to(api::get_ttl))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::get()
+        .uri("/api/ttl/ghost")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: i64 = awtest::read_body_json(resp).await;
+    assert_eq!(body, -2);
+}
+
+#[actix_web::test]
+async fn test_api_get_ttl_returns_minus_one_for_persistent_key() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    {
+        store.write().set("name".to_string(), "alice").unwrap();
+    }
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .service(web::scope("/api").route("/ttl/{key}", web::get().to(api::get_ttl))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::get().uri("/api/ttl/name").to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: i64 = awtest::read_body_json(resp).await;
+    assert_eq!(body, -1);
+}
+
+#[actix_web::test]
+async fn test_api_get_ttl_returns_positive_for_expiring_key() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    {
+        store
+            .write()
+            .set_with_ttl(
+                "token".to_string(),
+                "xyz",
+                std::time::Duration::from_secs(120),
+            )
+            .unwrap();
+    }
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .service(web::scope("/api").route("/ttl/{key}", web::get().to(api::get_ttl))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::get()
+        .uri("/api/ttl/token")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: i64 = awtest::read_body_json(resp).await;
+    assert!(
+        body > 0 && body <= 120,
+        "expected 0 < ttl <= 120, got {}",
+        body
+    );
+}
+
+#[actix_web::test]
+async fn test_api_get_pttl_returns_millis() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    {
+        store
+            .write()
+            .set_with_ttl("tok2".to_string(), "v", std::time::Duration::from_secs(60))
+            .unwrap();
+    }
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .service(web::scope("/api").route("/pttl/{key}", web::get().to(api::get_pttl))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::get()
+        .uri("/api/pttl/tok2")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: i64 = awtest::read_body_json(resp).await;
+    // Should be close to 60 000 ms
+    assert!(
+        body > 0 && body <= 60_000,
+        "expected 0 < pttl <= 60000, got {}",
+        body
+    );
+}
+
+#[actix_web::test]
+async fn test_api_set_expire_updates_ttl() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("expire_set.wal")).unwrap());
+    {
+        store.write().set("mykey".to_string(), "hello").unwrap();
+    }
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(Arc::clone(&store)))
+            .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
+            .service(
+                web::scope("/api")
+                    .route("/expire/{key}", web::put().to(api::set_expire))
+                    .route("/ttl/{key}", web::get().to(api::get_ttl)),
+            ),
+    )
+    .await;
+
+    // Set a 90-second TTL
+    let req = awtest::TestRequest::put()
+        .uri("/api/expire/mykey")
+        .set_json(serde_json::json!({ "ttl_secs": 90 }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: bool = awtest::read_body_json(resp).await;
+    assert!(body);
+
+    // Confirm TTL is now set
+    let req = awtest::TestRequest::get()
+        .uri("/api/ttl/mykey")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    let ttl: i64 = awtest::read_body_json(resp).await;
+    assert!(ttl > 0 && ttl <= 90);
+}
+
+#[actix_web::test]
+async fn test_api_set_expire_returns_404_for_missing_key() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("expire_miss.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
+            .service(web::scope("/api").route("/expire/{key}", web::put().to(api::set_expire))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::put()
+        .uri("/api/expire/no_such_key")
+        .set_json(serde_json::json!({ "ttl_secs": 30 }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[actix_web::test]
+async fn test_api_persist_removes_ttl() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("persist_key.wal")).unwrap());
+    {
+        store
+            .write()
+            .set_with_ttl(
+                "expiring".to_string(),
+                "val",
+                std::time::Duration::from_secs(300),
+            )
+            .unwrap();
+    }
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(Arc::clone(&store)))
+            .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
+            .service(
+                web::scope("/api")
+                    .route("/expire/{key}", web::delete().to(api::persist_key))
+                    .route("/ttl/{key}", web::get().to(api::get_ttl)),
+            ),
+    )
+    .await;
+
+    // Remove the TTL
+    let req = awtest::TestRequest::delete()
+        .uri("/api/expire/expiring")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: bool = awtest::read_body_json(resp).await;
+    assert!(body);
+
+    // TTL should now be -1 (persistent)
+    let req = awtest::TestRequest::get()
+        .uri("/api/ttl/expiring")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    let ttl: i64 = awtest::read_body_json(resp).await;
+    assert_eq!(ttl, -1);
+}
+
+#[actix_web::test]
+async fn test_api_persist_returns_404_for_missing_key() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("persist_miss.wal")).unwrap());
+
+    let app = awtest::init_service(
+        App::new()
+            .app_data(web::Data::from(store))
+            .app_data(web::Data::from(wal))
+            .app_data(web::Data::new(PubSub::new()))
+            .service(web::scope("/api").route("/expire/{key}", web::delete().to(api::persist_key))),
+    )
+    .await;
+
+    let req = awtest::TestRequest::delete()
+        .uri("/api/expire/phantom")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}

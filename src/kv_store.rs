@@ -533,6 +533,49 @@ impl KvStore {
         self.get(key).is_some()
     }
 
+    /// Set or update the TTL on an existing key without changing its value.
+    ///
+    /// Returns `true` if the timeout was set, `false` if the key does not exist.
+    pub fn expire(&mut self, key: &str, ttl: Duration) -> bool {
+        let Some(entry) = self.store.get_mut(key) else {
+            return false;
+        };
+
+        // Check if already expired
+        if let Some(exp) = entry.expires_at {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if now > exp {
+                return false;
+            }
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        entry.expires_at = now.checked_add(ttl.as_secs());
+        self.emit_keyspace_event(KeyspaceEventKind::Set, key.to_string());
+        true
+    }
+
+    /// Remove the TTL from a key, making it persist indefinitely.
+    ///
+    /// Returns `true` if the TTL was removed, `false` if the key does not exist or had no TTL.
+    pub fn persist(&mut self, key: &str) -> bool {
+        let Some(entry) = self.store.get_mut(key) else {
+            return false;
+        };
+        if entry.expires_at.is_none() {
+            return false;
+        }
+        entry.expires_at = None;
+        self.emit_keyspace_event(KeyspaceEventKind::Set, key.to_string());
+        true
+    }
+
     /// Return remaining TTL in seconds for a key.
     ///
     /// Semantics follow Redis:

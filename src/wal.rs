@@ -52,6 +52,10 @@ pub enum WalOperation {
     LPop { key: String },
     #[serde(rename = "RPOP")]
     RPop { key: String },
+    #[serde(rename = "EXPIRE")]
+    Expire { key: String, ttl_secs: u64 },
+    #[serde(rename = "PERSIST")]
+    Persist { key: String },
 }
 
 impl WalEntry {

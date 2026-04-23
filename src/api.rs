@@ -623,6 +623,94 @@ pub async fn cleanup_expired(
     publish_keyspace_events(&mut store, &pubsub);
     HttpResponse::Ok().json(removed)
 }
+// GET /api/ttl/{key}
+pub async fn get_ttl(store: WebKvStore, key: web::Path<String>) -> impl Responder {
+    let store = store.read();
+    let ttl = store.ttl_seconds(&key);
+    HttpResponse::Ok().json(ttl)
+}
+
+// GET /api/pttl/{key}
+pub async fn get_pttl(store: WebKvStore, key: web::Path<String>) -> impl Responder {
+    let store = store.read();
+    let pttl = store.pttl_millis(&key);
+    HttpResponse::Ok().json(pttl)
+}
+
+#[derive(Deserialize)]
+pub struct ExpireRequest {
+    pub ttl_secs: u64,
+}
+
+// PUT /api/expire/{key}  — set/update the TTL on an existing key
+pub async fn set_expire(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    pubsub: WebPubSub,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    key: web::Path<String>,
+    req: web::Json<ExpireRequest>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+    if req.ttl_secs == 0 {
+        return HttpResponse::BadRequest().body("ttl_secs must be greater than 0");
+    }
+
+    let entry = WalEntry::new(WalOperation::Expire {
+        key: key.to_string(),
+        ttl_secs: req.ttl_secs,
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
+    let mut store = store.write();
+    let set = store.expire(&key, std::time::Duration::from_secs(req.ttl_secs));
+    publish_keyspace_events(&mut store, &pubsub);
+
+    if set {
+        HttpResponse::Ok().json(true)
+    } else {
+        HttpResponse::NotFound().json(false)
+    }
+}
+
+// DELETE /api/expire/{key}  — remove TTL, making the key persist indefinitely
+pub async fn persist_key(
+    http_req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    pubsub: WebPubSub,
+    runtime: Option<web::Data<ApiRuntimeConfig>>,
+    key: web::Path<String>,
+) -> impl Responder {
+    if let Some(response) = require_api_key(&http_req, runtime.as_ref()) {
+        return response;
+    }
+
+    let entry = WalEntry::new(WalOperation::Persist {
+        key: key.to_string(),
+    });
+    if let Err(e) = wal.append(&entry) {
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to log operation to WAL: {}", e));
+    }
+
+    let mut store = store.write();
+    let removed = store.persist(&key);
+    publish_keyspace_events(&mut store, &pubsub);
+
+    if removed {
+        HttpResponse::Ok().json(true)
+    } else {
+        HttpResponse::NotFound().json(false)
+    }
+}
+
 // POST /api/multi
 pub async fn multi(
     http_req: HttpRequest,
