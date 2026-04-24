@@ -1,5 +1,6 @@
 use crate::error::{KvStoreError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -56,6 +57,12 @@ pub enum WalOperation {
     Expire { key: String, ttl_secs: u64 },
     #[serde(rename = "PERSIST")]
     Persist { key: String },
+    #[serde(rename = "HSET")]
+    HSet { key: String, fields: HashMap<String, String> },
+    #[serde(rename = "HDEL")]
+    HDel { key: String, fields: Vec<String> },
+    #[serde(rename = "HINCRBY")]
+    HIncrBy { key: String, field: String, amount: i64 },
 }
 
 impl WalEntry {

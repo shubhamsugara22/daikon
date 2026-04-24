@@ -374,6 +374,15 @@ impl Pitr {
             WalOperation::Persist { key } => {
                 store.persist(&key);
             }
+            WalOperation::HSet { key, fields } => {
+                let _ = store.hset(&key, fields.clone());
+            }
+            WalOperation::HDel { key, fields } => {
+                let _ = store.hdel(&key, &fields);
+            }
+            WalOperation::HIncrBy { key, field, amount } => {
+                let _ = store.hincrby(&key, &field, amount);
+            }
         }
         Ok(())
     }

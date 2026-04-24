@@ -1,6 +1,7 @@
 use actix_web::{http::header, web, HttpRequest, HttpResponse, Responder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::kv_store::KvStore;
@@ -100,6 +101,33 @@ pub struct ListLenResponse {
 pub struct ListResponse {
     keys: Vec<String>,
     values: Vec<String>,
+}
+
+// ===== Hash Request/Response Structs =====
+
+#[derive(Deserialize)]
+pub struct HSetRequest {
+    pub fields: HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+pub struct HMGetRequest {
+    pub fields: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct HDelRequest {
+    pub fields: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct HIncrByRequest {
+    pub amount: i64,
+}
+
+#[derive(Deserialize)]
+pub struct HIncrByFloatRequest {
+    pub amount: f64,
 }
 
 #[derive(Serialize)]
@@ -1892,6 +1920,264 @@ pub async fn list_llen(
     let store = store.read();
     match store.llen(&key) {
         Ok(length) => HttpResponse::Ok().json(ListLenResponse { key, length }),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+// ===== Hash Operation Handlers =====
+
+pub async fn hash_hset(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+    body: web::Json<HSetRequest>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let key = path.into_inner();
+    let fields = body.into_inner().fields;
+
+    let wal_entry = WalEntry::new(WalOperation::HSet {
+        key: key.clone(),
+        fields: fields.clone(),
+    });
+    if let Err(e) = wal.append(&wal_entry) {
+        return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+    }
+
+    let mut store = store.write();
+    match store.hset(&key, fields) {
+        Ok(added) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "added": added })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hget(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<(String, String)>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let (key, field) = path.into_inner();
+
+    let store = store.read();
+    match store.hget(&key, &field) {
+        Ok(value) => HttpResponse::Ok()
+            .json(serde_json::json!({ "key": key, "field": field, "value": value })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hmget(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+    body: web::Json<HMGetRequest>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let key = path.into_inner();
+    let fields = body.into_inner().fields;
+
+    let store = store.read();
+    match store.hmget(&key, &fields) {
+        Ok(values) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "values": values })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hdel(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+    body: web::Json<HDelRequest>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let key = path.into_inner();
+    let fields = body.into_inner().fields;
+
+    let wal_entry = WalEntry::new(WalOperation::HDel {
+        key: key.clone(),
+        fields: fields.clone(),
+    });
+    if let Err(e) = wal.append(&wal_entry) {
+        return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+    }
+
+    let mut store = store.write();
+    match store.hdel(&key, &fields) {
+        Ok(removed) => {
+            HttpResponse::Ok().json(serde_json::json!({ "key": key, "removed": removed }))
+        }
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hgetall(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let key = path.into_inner();
+
+    let store = store.read();
+    match store.hgetall(&key) {
+        Ok(fields) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "fields": fields })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hkeys(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let key = path.into_inner();
+
+    let store = store.read();
+    match store.hkeys(&key) {
+        Ok(keys) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "fields": keys })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hvals(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let key = path.into_inner();
+
+    let store = store.read();
+    match store.hvals(&key) {
+        Ok(values) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "values": values })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hlen(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let key = path.into_inner();
+
+    let store = store.read();
+    match store.hlen(&key) {
+        Ok(length) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "length": length })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hexists(
+    req: HttpRequest,
+    store: WebKvStore,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<(String, String)>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let (key, field) = path.into_inner();
+
+    let store = store.read();
+    match store.hexists(&key, &field) {
+        Ok(exists) => HttpResponse::Ok()
+            .json(serde_json::json!({ "key": key, "field": field, "exists": exists })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hincrby(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<(String, String)>,
+    body: web::Json<HIncrByRequest>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let (key, field) = path.into_inner();
+    let amount = body.into_inner().amount;
+
+    let wal_entry = WalEntry::new(WalOperation::HIncrBy {
+        key: key.clone(),
+        field: field.clone(),
+        amount,
+    });
+    if let Err(e) = wal.append(&wal_entry) {
+        return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+    }
+
+    let mut store = store.write();
+    match store.hincrby(&key, &field, amount) {
+        Ok(value) => HttpResponse::Ok()
+            .json(serde_json::json!({ "key": key, "field": field, "value": value })),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
+pub async fn hash_hincrbyfloat(
+    req: HttpRequest,
+    store: WebKvStore,
+    wal: WebWal,
+    config: Option<web::Data<ApiRuntimeConfig>>,
+    path: web::Path<(String, String)>,
+    body: web::Json<HIncrByFloatRequest>,
+) -> impl Responder {
+    if let Some(resp) = require_api_key(&req, config.as_ref()) {
+        return resp;
+    }
+    let (key, field) = path.into_inner();
+    let amount = body.into_inner().amount;
+
+    // WAL as HSet with the serialized result (to avoid float precision in replay)
+    let mut store_write = store.write();
+    match store_write.hincrbyfloat(&key, &field, amount) {
+        Ok(value) => {
+            // Log the resulting state as HSet for deterministic WAL replay
+            let mut fields = HashMap::new();
+            fields.insert(field.clone(), value.to_string());
+            let wal_entry = WalEntry::new(WalOperation::HSet {
+                key: key.clone(),
+                fields,
+            });
+            if let Err(e) = wal.append(&wal_entry) {
+                return HttpResponse::InternalServerError().body(format!("WAL error: {}", e));
+            }
+            HttpResponse::Ok()
+                .json(serde_json::json!({ "key": key, "field": field, "value": value }))
+        }
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }

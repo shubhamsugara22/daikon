@@ -112,6 +112,45 @@ pub fn execute_script(store: &mut KvStore, wal: Option<&Wal>, script: &str) -> R
         })?;
         globals.set("pttl", pttl_fn)?;
 
+        // hset(key, field, value) -> bool
+        let store_for_hset = Rc::clone(&store_ref);
+        let hset_fn = scope.create_function_mut(move |_, (key, field, value): (String, String, String)| {
+            let mut store = store_for_hset.borrow_mut();
+            let mut fields = std::collections::HashMap::new();
+            fields.insert(field, value);
+            Ok(store.hset(&key, fields).is_ok())
+        })?;
+        globals.set("hset", hset_fn)?;
+
+        // hget(key, field) -> Option<String>
+        let store_for_hget = Rc::clone(&store_ref);
+        let hget_fn = scope.create_function_mut(move |_, (key, field): (String, String)| {
+            let store = store_for_hget.borrow();
+            Ok(store.hget(&key, &field).unwrap_or(None))
+        })?;
+        globals.set("hget", hget_fn)?;
+
+        // hdel(key, field) -> bool
+        let store_for_hdel = Rc::clone(&store_ref);
+        let hdel_fn = scope.create_function_mut(move |_, (key, field): (String, String)| {
+            let mut store = store_for_hdel.borrow_mut();
+            Ok(store.hdel(&key, &[field]).map(|n| n > 0).unwrap_or(false))
+        })?;
+        globals.set("hdel", hdel_fn)?;
+
+        // hgetall(key) -> Table
+        let store_for_hgetall = Rc::clone(&store_ref);
+        let hgetall_fn = scope.create_function_mut(move |lua_ctx, key: String| {
+            let store = store_for_hgetall.borrow();
+            let map = store.hgetall(&key).unwrap_or_default();
+            let table = lua_ctx.create_table()?;
+            for (k, v) in map {
+                table.set(k, v)?;
+            }
+            Ok(table)
+        })?;
+        globals.set("hgetall", hgetall_fn)?;
+
         let output_for_print = Rc::clone(&output);
         let print_fn = scope.create_function_mut(move |_, message: String| {
             let mut out = output_for_print.borrow_mut();

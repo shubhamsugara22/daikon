@@ -487,6 +487,27 @@ async fn main() -> std::io::Result<()> {
                 .route("/list/{key}/rpop", web::post().to(api::list_rpop))
                 .route("/list/{key}/lrange", web::get().to(api::list_lrange))
                 .route("/list/{key}/llen", web::get().to(api::list_llen))
+                // Hash operations
+                .route("/hash/{key}/hset", web::put().to(api::hash_hset))
+                .route("/hash/{key}/hget/{field}", web::get().to(api::hash_hget))
+                .route("/hash/{key}/hmget", web::post().to(api::hash_hmget))
+                .route("/hash/{key}/hdel", web::delete().to(api::hash_hdel))
+                .route("/hash/{key}/hgetall", web::get().to(api::hash_hgetall))
+                .route("/hash/{key}/hkeys", web::get().to(api::hash_hkeys))
+                .route("/hash/{key}/hvals", web::get().to(api::hash_hvals))
+                .route("/hash/{key}/hlen", web::get().to(api::hash_hlen))
+                .route(
+                    "/hash/{key}/hexists/{field}",
+                    web::get().to(api::hash_hexists),
+                )
+                .route(
+                    "/hash/{key}/hincrby/{field}",
+                    web::post().to(api::hash_hincrby),
+                )
+                .route(
+                    "/hash/{key}/hincrbyfloat/{field}",
+                    web::post().to(api::hash_hincrbyfloat),
+                )
                 // Pipeline
                 .route("/pipeline", web::post().to(api::pipeline_exec))
                 // Keyspace notifications config
@@ -638,6 +659,15 @@ fn replay_wal(wal: &Wal, mut store: KvStore) -> Result<KvStore, String> {
             }
             WalOperation::Persist { key } => {
                 store.persist(key);
+            }
+            WalOperation::HSet { key, fields } => {
+                let _ = store.hset(key, fields.clone());
+            }
+            WalOperation::HDel { key, fields } => {
+                let _ = store.hdel(key, fields);
+            }
+            WalOperation::HIncrBy { key, field, amount } => {
+                let _ = store.hincrby(key, field, *amount);
             }
         }
     }

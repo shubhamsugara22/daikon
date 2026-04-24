@@ -102,6 +102,7 @@ pub enum Value {
     Json(JsonValue),
     HyperLogLog(HyperLogLog),
     List(Vec<String>),
+    Hash(HashMap<String, String>),
 }
 
 impl fmt::Display for Value {
@@ -114,6 +115,7 @@ impl fmt::Display for Value {
             Value::Json(j) => write!(f, "{}", j),
             Value::HyperLogLog(hll) => write!(f, "HyperLogLog(count≈{})", hll.count()),
             Value::List(items) => write!(f, "List(len={})", items.len()),
+            Value::Hash(map) => write!(f, "Hash(len={})", map.len()),
         }
     }
 }
@@ -129,6 +131,7 @@ impl Value {
             Value::Json(_) => "Json",
             Value::HyperLogLog(_) => "HyperLogLog",
             Value::List(_) => "List",
+            Value::Hash(_) => "Hash",
         }
     }
 }
@@ -902,6 +905,10 @@ impl KvStore {
                     profile.value_bytes += items.iter().map(|s| s.len()).sum::<usize>() + 24;
                     profile.list_values += 1;
                 }
+                Value::Hash(map) => {
+                    profile.value_bytes +=
+                        map.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() + 48;
+                }
             }
 
             // Count TTL entries
@@ -1130,6 +1137,7 @@ impl KvStore {
             Value::Json(j) => j.to_string().len(),
             Value::HyperLogLog(hll) => hll.memory_bytes(),
             Value::List(items) => items.iter().map(|s| s.len()).sum::<usize>() + 24,
+            Value::Hash(map) => map.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() + 48,
         }
     }
 
@@ -1523,6 +1531,230 @@ impl KvStore {
             Some(other) => Err(KvStoreError::type_mismatch(key, "List", other.type_name())),
             None => Ok(0),
         }
+    }
+
+    // ===== Hash Operations =====
+
+    /// Set one or more fields in a hash. Creates the hash if it doesn't exist.
+    /// Returns the number of new fields added.
+    pub fn hset(&mut self, key: &str, fields: HashMap<String, String>) -> Result<usize> {
+        self.validate_key(key)?;
+        let added = match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Hash(ref mut map) = entry.value {
+                    let mut new_count = 0usize;
+                    for (f, v) in fields {
+                        if map.insert(f, v).is_none() {
+                            new_count += 1;
+                        }
+                    }
+                    self.stats.total_writes += 1;
+                    new_count
+                } else {
+                    return Err(KvStoreError::type_mismatch(
+                        key,
+                        "Hash",
+                        entry.value.type_name(),
+                    ));
+                }
+            }
+            None => {
+                let new_count = fields.len();
+                let value = Value::Hash(fields);
+                let value_size = self.estimate_value_size(&value);
+                self.store.insert(
+                    key.to_string(),
+                    ValueWithTTL {
+                        value,
+                        expires_at: None,
+                    },
+                );
+                self.stats.total_writes += 1;
+                self.stats.total_keys = self.store.len();
+                self.stats.memory_bytes += value_size;
+                new_count
+            }
+        };
+        self.update_lru(key);
+        debug!("HSET key '{}', {} new fields", key, added);
+        Ok(added)
+    }
+
+    /// Get the value of a hash field. Returns None if key or field doesn't exist.
+    pub fn hget(&self, key: &str, field: &str) -> Result<Option<String>> {
+        match self.get(key) {
+            Some(Value::Hash(map)) => Ok(map.get(field).cloned()),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "Hash", other.type_name())),
+            None => Ok(None),
+        }
+    }
+
+    /// Get values for multiple fields. Missing fields return None.
+    pub fn hmget(&self, key: &str, fields: &[String]) -> Result<Vec<Option<String>>> {
+        match self.get(key) {
+            Some(Value::Hash(map)) => Ok(fields.iter().map(|f| map.get(f).cloned()).collect()),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "Hash", other.type_name())),
+            None => Ok(fields.iter().map(|_| None).collect()),
+        }
+    }
+
+    /// Delete one or more fields from a hash. Returns number of fields removed.
+    pub fn hdel(&mut self, key: &str, fields: &[String]) -> Result<usize> {
+        match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Hash(ref mut map) = entry.value {
+                    let removed = fields.iter().filter(|f| map.remove(*f).is_some()).count();
+                    if removed > 0 {
+                        self.stats.total_writes += 1;
+                    }
+                    self.update_lru(key);
+                    debug!("HDEL key '{}', {} fields removed", key, removed);
+                    Ok(removed)
+                } else {
+                    Err(KvStoreError::type_mismatch(
+                        key,
+                        "Hash",
+                        entry.value.type_name(),
+                    ))
+                }
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Return all field-value pairs in a hash.
+    pub fn hgetall(&self, key: &str) -> Result<HashMap<String, String>> {
+        match self.get(key) {
+            Some(Value::Hash(map)) => Ok(map.clone()),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "Hash", other.type_name())),
+            None => Ok(HashMap::new()),
+        }
+    }
+
+    /// Return all field names in a hash.
+    pub fn hkeys(&self, key: &str) -> Result<Vec<String>> {
+        match self.get(key) {
+            Some(Value::Hash(map)) => Ok(map.keys().cloned().collect()),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "Hash", other.type_name())),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Return all values in a hash.
+    pub fn hvals(&self, key: &str) -> Result<Vec<String>> {
+        match self.get(key) {
+            Some(Value::Hash(map)) => Ok(map.values().cloned().collect()),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "Hash", other.type_name())),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Return the number of fields in a hash.
+    pub fn hlen(&self, key: &str) -> Result<usize> {
+        match self.get(key) {
+            Some(Value::Hash(map)) => Ok(map.len()),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "Hash", other.type_name())),
+            None => Ok(0),
+        }
+    }
+
+    /// Return whether a field exists in a hash.
+    pub fn hexists(&self, key: &str, field: &str) -> Result<bool> {
+        match self.get(key) {
+            Some(Value::Hash(map)) => Ok(map.contains_key(field)),
+            Some(other) => Err(KvStoreError::type_mismatch(key, "Hash", other.type_name())),
+            None => Ok(false),
+        }
+    }
+
+    /// Increment the integer value of a hash field by the given amount.
+    pub fn hincrby(&mut self, key: &str, field: &str, amount: i64) -> Result<i64> {
+        self.validate_key(key)?;
+        let new_val = match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Hash(ref mut map) = entry.value {
+                    let current: i64 = map
+                        .get(field)
+                        .map(|v| v.parse::<i64>().unwrap_or(0))
+                        .unwrap_or(0);
+                    let next = current + amount;
+                    map.insert(field.to_string(), next.to_string());
+                    self.stats.total_writes += 1;
+                    next
+                } else {
+                    return Err(KvStoreError::type_mismatch(
+                        key,
+                        "Hash",
+                        entry.value.type_name(),
+                    ));
+                }
+            }
+            None => {
+                let mut map = HashMap::new();
+                map.insert(field.to_string(), amount.to_string());
+                let value = Value::Hash(map);
+                let value_size = self.estimate_value_size(&value);
+                self.store.insert(
+                    key.to_string(),
+                    ValueWithTTL {
+                        value,
+                        expires_at: None,
+                    },
+                );
+                self.stats.total_writes += 1;
+                self.stats.total_keys = self.store.len();
+                self.stats.memory_bytes += value_size;
+                amount
+            }
+        };
+        self.update_lru(key);
+        debug!("HINCRBY key '{}' field '{}': {}", key, field, new_val);
+        Ok(new_val)
+    }
+
+    /// Increment the float value of a hash field by the given amount.
+    pub fn hincrbyfloat(&mut self, key: &str, field: &str, amount: f64) -> Result<f64> {
+        self.validate_key(key)?;
+        let new_val = match self.store.get_mut(key) {
+            Some(entry) => {
+                if let Value::Hash(ref mut map) = entry.value {
+                    let current: f64 = map
+                        .get(field)
+                        .map(|v| v.parse::<f64>().unwrap_or(0.0))
+                        .unwrap_or(0.0);
+                    let next = current + amount;
+                    map.insert(field.to_string(), next.to_string());
+                    self.stats.total_writes += 1;
+                    next
+                } else {
+                    return Err(KvStoreError::type_mismatch(
+                        key,
+                        "Hash",
+                        entry.value.type_name(),
+                    ));
+                }
+            }
+            None => {
+                let mut map = HashMap::new();
+                map.insert(field.to_string(), amount.to_string());
+                let value = Value::Hash(map);
+                let value_size = self.estimate_value_size(&value);
+                self.store.insert(
+                    key.to_string(),
+                    ValueWithTTL {
+                        value,
+                        expires_at: None,
+                    },
+                );
+                self.stats.total_writes += 1;
+                self.stats.total_keys = self.store.len();
+                self.stats.memory_bytes += value_size;
+                amount
+            }
+        };
+        self.update_lru(key);
+        debug!("HINCRBYFLOAT key '{}' field '{}': {}", key, field, new_val);
+        Ok(new_val)
     }
 
     /// Queue an operation in the current transaction
