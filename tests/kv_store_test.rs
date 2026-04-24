@@ -1080,3 +1080,181 @@ fn test_keyspace_event_kind_display() {
     assert_eq!(format!("{}", KeyspaceEventKind::Expired), "expired");
     assert_eq!(format!("{}", KeyspaceEventKind::Evicted), "evicted");
 }
+
+// ─── Hash Map Tests ───────────────────────────────────────────────────────────
+
+#[test]
+fn test_hash_basic_hset_hget() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("name".to_string(), "Alice".to_string());
+    let added = store.hset("user:1", fields).unwrap();
+    assert_eq!(added, 1);
+
+    let val = store.hget("user:1", "name").unwrap();
+    assert_eq!(val, Some("Alice".to_string()));
+
+    let missing = store.hget("user:1", "age").unwrap();
+    assert_eq!(missing, None);
+}
+
+#[test]
+fn test_hash_multiple_fields() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("f1".to_string(), "v1".to_string());
+    fields.insert("f2".to_string(), "v2".to_string());
+    fields.insert("f3".to_string(), "v3".to_string());
+    let added = store.hset("myhash", fields).unwrap();
+    assert_eq!(added, 3);
+
+    let all = store.hgetall("myhash").unwrap();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all.get("f1").unwrap(), "v1");
+    assert_eq!(all.get("f2").unwrap(), "v2");
+    assert_eq!(all.get("f3").unwrap(), "v3");
+}
+
+#[test]
+fn test_hash_hmget() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("a".to_string(), "1".to_string());
+    fields.insert("b".to_string(), "2".to_string());
+    store.hset("h", fields).unwrap();
+
+    let keys = vec!["a".to_string(), "missing".to_string(), "b".to_string()];
+    let results = store.hmget("h", &keys).unwrap();
+    assert_eq!(results[0], Some("1".to_string()));
+    assert_eq!(results[1], None);
+    assert_eq!(results[2], Some("2".to_string()));
+}
+
+#[test]
+fn test_hash_hdel() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("x".to_string(), "10".to_string());
+    fields.insert("y".to_string(), "20".to_string());
+    store.hset("h", fields).unwrap();
+
+    let removed = store.hdel("h", &["x".to_string()]).unwrap();
+    assert_eq!(removed, 1);
+
+    assert_eq!(store.hlen("h").unwrap(), 1);
+    assert_eq!(store.hget("h", "x").unwrap(), None);
+
+    // deleting a non-existent field returns 0
+    let removed2 = store.hdel("h", &["gone".to_string()]).unwrap();
+    assert_eq!(removed2, 0);
+}
+
+#[test]
+fn test_hash_hkeys_hvals() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("k1".to_string(), "v1".to_string());
+    fields.insert("k2".to_string(), "v2".to_string());
+    store.hset("h", fields).unwrap();
+
+    let mut keys = store.hkeys("h").unwrap();
+    keys.sort();
+    assert_eq!(keys, vec!["k1", "k2"]);
+
+    let mut vals = store.hvals("h").unwrap();
+    vals.sort();
+    assert_eq!(vals, vec!["v1", "v2"]);
+}
+
+#[test]
+fn test_hash_hlen() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    assert_eq!(store.hlen("nokey").unwrap(), 0);
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("a".to_string(), "1".to_string());
+    fields.insert("b".to_string(), "2".to_string());
+    store.hset("h", fields).unwrap();
+    assert_eq!(store.hlen("h").unwrap(), 2);
+}
+
+#[test]
+fn test_hash_hexists() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("present".to_string(), "yes".to_string());
+    store.hset("h", fields).unwrap();
+
+    assert!(store.hexists("h", "present").unwrap());
+    assert!(!store.hexists("h", "absent").unwrap());
+    assert!(!store.hexists("nokey", "f").unwrap());
+}
+
+#[test]
+fn test_hash_hincrby() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    // starts at 0 if field doesn't exist
+    let r1 = store.hincrby("counter", "hits", 5).unwrap();
+    assert_eq!(r1, 5);
+
+    let r2 = store.hincrby("counter", "hits", 3).unwrap();
+    assert_eq!(r2, 8);
+
+    let r3 = store.hincrby("counter", "hits", -2).unwrap();
+    assert_eq!(r3, 6);
+}
+
+#[test]
+fn test_hash_hincrbyfloat() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    let r1 = store.hincrbyfloat("h", "score", 1.5).unwrap();
+    assert!((r1 - 1.5).abs() < f64::EPSILON);
+
+    let r2 = store.hincrbyfloat("h", "score", 0.5).unwrap();
+    assert!((r2 - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn test_hash_type_error() {
+    let config = StoreConfig::default();
+    let mut store = KvStore::new(config).unwrap();
+
+    store.set("strkey", "value").unwrap();
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("f".to_string(), "v".to_string());
+    assert!(store.hset("strkey", fields).is_err());
+    assert!(store.hget("strkey", "f").is_err());
+    assert!(store.hlen("strkey").is_err());
+}
+
+#[test]
+fn test_hash_nonexistent_key() {
+    let config = StoreConfig::default();
+    let store = KvStore::new(config).unwrap();
+
+    assert_eq!(store.hgetall("nope").unwrap().len(), 0);
+    assert_eq!(store.hkeys("nope").unwrap().len(), 0);
+    assert_eq!(store.hvals("nope").unwrap().len(), 0);
+    assert_eq!(store.hlen("nope").unwrap(), 0);
+    assert_eq!(store.hget("nope", "f").unwrap(), None);
+    assert!(!store.hexists("nope", "f").unwrap());
+}

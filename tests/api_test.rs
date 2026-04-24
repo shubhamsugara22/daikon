@@ -968,3 +968,222 @@ async fn test_api_persist_returns_404_for_missing_key() {
     let resp = awtest::call_service(&app, req).await;
     assert_eq!(resp.status(), 404);
 }
+
+// ─── Hash Map API Tests ───────────────────────────────────────────────────────
+
+fn make_hash_app(
+    store: Arc<RwLock<KvStore>>,
+    wal: Arc<Wal>,
+) -> App<
+    impl actix_web::dev::ServiceFactory<
+        actix_web::dev::ServiceRequest,
+        Config = (),
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+        InitError = (),
+    >,
+> {
+    App::new()
+        .app_data(web::Data::from(store))
+        .app_data(web::Data::from(wal))
+        .app_data(web::Data::new(PubSub::new()))
+        .service(
+            web::scope("/api")
+                .route("/hash/{key}/hset", web::put().to(api::hash_hset))
+                .route("/hash/{key}/hget/{field}", web::get().to(api::hash_hget))
+                .route("/hash/{key}/hmget", web::post().to(api::hash_hmget))
+                .route("/hash/{key}/hdel", web::delete().to(api::hash_hdel))
+                .route("/hash/{key}/hgetall", web::get().to(api::hash_hgetall))
+                .route("/hash/{key}/hkeys", web::get().to(api::hash_hkeys))
+                .route("/hash/{key}/hvals", web::get().to(api::hash_hvals))
+                .route("/hash/{key}/hlen", web::get().to(api::hash_hlen))
+                .route(
+                    "/hash/{key}/hexists/{field}",
+                    web::get().to(api::hash_hexists),
+                )
+                .route(
+                    "/hash/{key}/hincrby/{field}",
+                    web::post().to(api::hash_hincrby),
+                )
+                .route(
+                    "/hash/{key}/hincrbyfloat/{field}",
+                    web::post().to(api::hash_hincrbyfloat),
+                ),
+        )
+}
+
+#[actix_web::test]
+async fn test_api_hash_hset_and_hget() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("hash.wal")).unwrap());
+    let app = awtest::init_service(make_hash_app(Arc::clone(&store), Arc::clone(&wal))).await;
+
+    // PUT hset
+    let req = awtest::TestRequest::put()
+        .uri("/api/hash/user:1/hset")
+        .set_json(serde_json::json!({ "fields": { "name": "Alice", "age": "30" } }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let added: usize = awtest::read_body_json(resp).await;
+    assert_eq!(added, 2);
+
+    // GET hget existing field
+    let req = awtest::TestRequest::get()
+        .uri("/api/hash/user:1/hget/name")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let val: String = awtest::read_body_json(resp).await;
+    assert_eq!(val, "Alice");
+
+    // GET hget missing field → 404
+    let req = awtest::TestRequest::get()
+        .uri("/api/hash/user:1/hget/missing")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[actix_web::test]
+async fn test_api_hash_hmget() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("hash_hmget.wal")).unwrap());
+    let app = awtest::init_service(make_hash_app(Arc::clone(&store), Arc::clone(&wal))).await;
+
+    let req = awtest::TestRequest::put()
+        .uri("/api/hash/h/hset")
+        .set_json(serde_json::json!({ "fields": { "a": "1", "b": "2" } }))
+        .to_request();
+    awtest::call_service(&app, req).await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/hash/h/hmget")
+        .set_json(serde_json::json!({ "fields": ["a", "gone", "b"] }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let vals: Vec<Option<String>> = awtest::read_body_json(resp).await;
+    assert_eq!(vals[0], Some("1".to_string()));
+    assert_eq!(vals[1], None);
+    assert_eq!(vals[2], Some("2".to_string()));
+}
+
+#[actix_web::test]
+async fn test_api_hash_hdel() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("hash_hdel.wal")).unwrap());
+    let app = awtest::init_service(make_hash_app(Arc::clone(&store), Arc::clone(&wal))).await;
+
+    let req = awtest::TestRequest::put()
+        .uri("/api/hash/h/hset")
+        .set_json(serde_json::json!({ "fields": { "x": "10", "y": "20" } }))
+        .to_request();
+    awtest::call_service(&app, req).await;
+
+    let req = awtest::TestRequest::delete()
+        .uri("/api/hash/h/hdel")
+        .set_json(serde_json::json!({ "fields": ["x"] }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let removed: usize = awtest::read_body_json(resp).await;
+    assert_eq!(removed, 1);
+}
+
+#[actix_web::test]
+async fn test_api_hash_hgetall() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("hash_hgetall.wal")).unwrap());
+    let app = awtest::init_service(make_hash_app(Arc::clone(&store), Arc::clone(&wal))).await;
+
+    let req = awtest::TestRequest::put()
+        .uri("/api/hash/h/hset")
+        .set_json(serde_json::json!({ "fields": { "k1": "v1", "k2": "v2" } }))
+        .to_request();
+    awtest::call_service(&app, req).await;
+
+    let req = awtest::TestRequest::get()
+        .uri("/api/hash/h/hgetall")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let map: std::collections::HashMap<String, String> = awtest::read_body_json(resp).await;
+    assert_eq!(map.get("k1").unwrap(), "v1");
+    assert_eq!(map.get("k2").unwrap(), "v2");
+}
+
+#[actix_web::test]
+async fn test_api_hash_hkeys() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("hash_hkeys.wal")).unwrap());
+    let app = awtest::init_service(make_hash_app(Arc::clone(&store), Arc::clone(&wal))).await;
+
+    let req = awtest::TestRequest::put()
+        .uri("/api/hash/h/hset")
+        .set_json(serde_json::json!({ "fields": { "a": "1", "b": "2" } }))
+        .to_request();
+    awtest::call_service(&app, req).await;
+
+    let req = awtest::TestRequest::get()
+        .uri("/api/hash/h/hkeys")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let mut keys: Vec<String> = awtest::read_body_json(resp).await;
+    keys.sort();
+    assert_eq!(keys, vec!["a", "b"]);
+}
+
+#[actix_web::test]
+async fn test_api_hash_hlen() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("hash_hlen.wal")).unwrap());
+    let app = awtest::init_service(make_hash_app(Arc::clone(&store), Arc::clone(&wal))).await;
+
+    let req = awtest::TestRequest::put()
+        .uri("/api/hash/h/hset")
+        .set_json(serde_json::json!({ "fields": { "x": "1", "y": "2", "z": "3" } }))
+        .to_request();
+    awtest::call_service(&app, req).await;
+
+    let req = awtest::TestRequest::get()
+        .uri("/api/hash/h/hlen")
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let len: usize = awtest::read_body_json(resp).await;
+    assert_eq!(len, 3);
+}
+
+#[actix_web::test]
+async fn test_api_hash_hincrby() {
+    let store = Arc::new(RwLock::new(KvStore::new()));
+    let temp_dir = TempDir::new().unwrap();
+    let wal = Arc::new(Wal::new(temp_dir.path().join("hash_hincrby.wal")).unwrap());
+    let app = awtest::init_service(make_hash_app(Arc::clone(&store), Arc::clone(&wal))).await;
+
+    let req = awtest::TestRequest::post()
+        .uri("/api/hash/counter/hincrby/hits")
+        .set_json(serde_json::json!({ "amount": 5 }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let result: i64 = awtest::read_body_json(resp).await;
+    assert_eq!(result, 5);
+
+    // increment again
+    let req = awtest::TestRequest::post()
+        .uri("/api/hash/counter/hincrby/hits")
+        .set_json(serde_json::json!({ "amount": 3 }))
+        .to_request();
+    let resp = awtest::call_service(&app, req).await;
+    let result: i64 = awtest::read_body_json(resp).await;
+    assert_eq!(result, 8);
+}
