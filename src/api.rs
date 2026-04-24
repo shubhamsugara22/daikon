@@ -1950,7 +1950,7 @@ pub async fn hash_hset(
 
     let mut store = store.write();
     match store.hset(&key, fields) {
-        Ok(added) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "added": added })),
+        Ok(added) => HttpResponse::Ok().json(added),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -1968,8 +1968,8 @@ pub async fn hash_hget(
 
     let store = store.read();
     match store.hget(&key, &field) {
-        Ok(value) => HttpResponse::Ok()
-            .json(serde_json::json!({ "key": key, "field": field, "value": value })),
+        Ok(Some(value)) => HttpResponse::Ok().json(value),
+        Ok(None) => HttpResponse::NotFound().finish(),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -1989,7 +1989,7 @@ pub async fn hash_hmget(
 
     let store = store.read();
     match store.hmget(&key, &fields) {
-        Ok(values) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "values": values })),
+        Ok(values) => HttpResponse::Ok().json(values),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -2018,9 +2018,7 @@ pub async fn hash_hdel(
 
     let mut store = store.write();
     match store.hdel(&key, &fields) {
-        Ok(removed) => {
-            HttpResponse::Ok().json(serde_json::json!({ "key": key, "removed": removed }))
-        }
+        Ok(removed) => HttpResponse::Ok().json(removed),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -2038,7 +2036,7 @@ pub async fn hash_hgetall(
 
     let store = store.read();
     match store.hgetall(&key) {
-        Ok(fields) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "fields": fields })),
+        Ok(fields) => HttpResponse::Ok().json(fields),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -2056,7 +2054,7 @@ pub async fn hash_hkeys(
 
     let store = store.read();
     match store.hkeys(&key) {
-        Ok(keys) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "fields": keys })),
+        Ok(keys) => HttpResponse::Ok().json(keys),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -2092,7 +2090,7 @@ pub async fn hash_hlen(
 
     let store = store.read();
     match store.hlen(&key) {
-        Ok(length) => HttpResponse::Ok().json(serde_json::json!({ "key": key, "length": length })),
+        Ok(length) => HttpResponse::Ok().json(length),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }
@@ -2141,8 +2139,7 @@ pub async fn hash_hincrby(
 
     let mut store = store.write();
     match store.hincrby(&key, &field, amount) {
-        Ok(value) => HttpResponse::Ok()
-            .json(serde_json::json!({ "key": key, "field": field, "value": value })),
+        Ok(value) => HttpResponse::Ok().json(value),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }
 }

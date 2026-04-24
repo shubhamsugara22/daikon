@@ -1085,8 +1085,7 @@ fn test_keyspace_event_kind_display() {
 
 #[test]
 fn test_hash_basic_hset_hget() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     let mut fields = std::collections::HashMap::new();
     fields.insert("name".to_string(), "Alice".to_string());
@@ -1102,8 +1101,7 @@ fn test_hash_basic_hset_hget() {
 
 #[test]
 fn test_hash_multiple_fields() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     let mut fields = std::collections::HashMap::new();
     fields.insert("f1".to_string(), "v1".to_string());
@@ -1121,8 +1119,7 @@ fn test_hash_multiple_fields() {
 
 #[test]
 fn test_hash_hmget() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     let mut fields = std::collections::HashMap::new();
     fields.insert("a".to_string(), "1".to_string());
@@ -1138,8 +1135,7 @@ fn test_hash_hmget() {
 
 #[test]
 fn test_hash_hdel() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     let mut fields = std::collections::HashMap::new();
     fields.insert("x".to_string(), "10".to_string());
@@ -1159,8 +1155,7 @@ fn test_hash_hdel() {
 
 #[test]
 fn test_hash_hkeys_hvals() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     let mut fields = std::collections::HashMap::new();
     fields.insert("k1".to_string(), "v1".to_string());
@@ -1178,8 +1173,7 @@ fn test_hash_hkeys_hvals() {
 
 #[test]
 fn test_hash_hlen() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     assert_eq!(store.hlen("nokey").unwrap(), 0);
 
@@ -1192,8 +1186,7 @@ fn test_hash_hlen() {
 
 #[test]
 fn test_hash_hexists() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     let mut fields = std::collections::HashMap::new();
     fields.insert("present".to_string(), "yes".to_string());
@@ -1206,8 +1199,7 @@ fn test_hash_hexists() {
 
 #[test]
 fn test_hash_hincrby() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     // starts at 0 if field doesn't exist
     let r1 = store.hincrby("counter", "hits", 5).unwrap();
@@ -1222,8 +1214,7 @@ fn test_hash_hincrby() {
 
 #[test]
 fn test_hash_hincrbyfloat() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
     let r1 = store.hincrbyfloat("h", "score", 1.5).unwrap();
     assert!((r1 - 1.5).abs() < f64::EPSILON);
@@ -1234,10 +1225,11 @@ fn test_hash_hincrbyfloat() {
 
 #[test]
 fn test_hash_type_error() {
-    let config = StoreConfig::default();
-    let mut store = KvStore::new(config).unwrap();
+    let mut store = KvStore::new();
 
-    store.set("strkey", "value").unwrap();
+    store
+        .set("strkey".to_string(), "value".to_string())
+        .unwrap();
 
     let mut fields = std::collections::HashMap::new();
     fields.insert("f".to_string(), "v".to_string());
@@ -1248,8 +1240,7 @@ fn test_hash_type_error() {
 
 #[test]
 fn test_hash_nonexistent_key() {
-    let config = StoreConfig::default();
-    let store = KvStore::new(config).unwrap();
+    let store = KvStore::new();
 
     assert_eq!(store.hgetall("nope").unwrap().len(), 0);
     assert_eq!(store.hkeys("nope").unwrap().len(), 0);
