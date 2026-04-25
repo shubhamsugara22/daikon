@@ -36,7 +36,7 @@ A simple guide to understanding the internals and integrating Daikon into your a
 
 ### Storage engine
 
-The core is a `HashMap<String, Value>` protected by a read-write lock (`parking_lot::RwLock`). Reads happen concurrently; writes are serialized. Each key can hold a string, integer, float, boolean, JSON object, or HyperLogLog.
+The core is a `HashMap<String, Value>` protected by a read-write lock (`parking_lot::RwLock`). Reads happen concurrently; writes are serialized. Each key can hold a string, integer, float, boolean, JSON object, Hash Map, or HyperLogLog.
 
 ### Write path
 
@@ -182,7 +182,63 @@ curl -X POST http://localhost:8080/api/exec
 curl -X POST http://localhost:8080/api/discard
 ```
 
-### 8. Health and monitoring
+### 8. Hash Maps
+
+Store structured objects under a single key using field-value pairs — similar to Redis hashes.
+
+```bash
+# Set one or more fields
+curl -X POST http://localhost:8080/api/hash/user:42/hset \
+  -H "Content-Type: application/json" \
+  -d '{"fields": {"name": "Alice", "age": "30", "city": "Berlin"}}'
+# → 3  (number of fields added)
+
+# Get a single field
+curl http://localhost:8080/api/hash/user:42/hget/name
+# → "Alice"
+
+# Get multiple fields at once
+curl -X POST http://localhost:8080/api/hash/user:42/hmget \
+  -H "Content-Type: application/json" \
+  -d '{"fields": ["name", "city", "missing"]}'
+# → ["Alice", "Berlin", null]
+
+# Get all fields
+curl http://localhost:8080/api/hash/user:42/hgetall
+# → {"name": "Alice", "age": "30", "city": "Berlin"}
+
+# List field names / values
+curl http://localhost:8080/api/hash/user:42/hkeys
+curl http://localhost:8080/api/hash/user:42/hvals
+
+# Count fields
+curl http://localhost:8080/api/hash/user:42/hlen
+# → 3
+
+# Check a field exists
+curl http://localhost:8080/api/hash/user:42/hexists/age
+# → true
+
+# Delete fields
+curl -X DELETE http://localhost:8080/api/hash/user:42/hdel \
+  -H "Content-Type: application/json" \
+  -d '{"fields": ["city"]}'
+# → 1  (number of fields removed)
+
+# Atomic integer increment on a field
+curl -X POST http://localhost:8080/api/hash/user:42/hincrby/age \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 1}'
+# → 31
+
+# Atomic float increment on a field
+curl -X POST http://localhost:8080/api/hash/user:42/hincrbyfloat/score \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 0.5}'
+# → 0.5
+```
+
+### 9. Health and monitoring
 
 ```bash
 curl http://localhost:8080/api/health/live     # liveness probe
@@ -293,6 +349,8 @@ Read endpoints (GET) are open. This lets you use Daikon as a shared cache where 
 | **Feature flags** | SET `flag:dark-mode` → `true`, GET from your app |
 | **Job queue signals** | Pub/Sub channels for worker coordination |
 | **Unique visitor count** | HyperLogLog (`pf-add` / `pf-count`) — low memory |
+| **Structured objects** | Hash Map — store user profiles, config objects, metadata under one key |
+| **Field-level updates** | `hincrby` / `hincrbyfloat` — update a single field without re-serializing the whole object |
 | **Distributed cache** | Master/replica replication for read scaling |
 | **Atomic counters** | INCR/DECR for page views, API call counts |
 
@@ -335,4 +393,16 @@ Read endpoints (GET) are open. This lets you use Daikon as a shared cache where 
 | GET | `/api/pubsub/channels` | List channels |
 | POST | `/api/hll/{key}/add` | HyperLogLog add |
 | GET | `/api/hll/{key}/count` | HyperLogLog count |
+| POST | `/api/hll/merge` | HyperLogLog merge |
 | POST | `/api/lua/exec` | Execute Lua script |
+| POST | `/api/hash/{key}/hset` | Hash: set fields (body: `{"fields": {...}}`) → number added |
+| GET | `/api/hash/{key}/hget/{field}` | Hash: get one field → string or 404 |
+| POST | `/api/hash/{key}/hmget` | Hash: get multiple fields (body: `{"fields": [...]}`) → `[value\|null, ...]` |
+| DELETE | `/api/hash/{key}/hdel` | Hash: delete fields (body: `{"fields": [...]}`) → number removed |
+| GET | `/api/hash/{key}/hgetall` | Hash: get all fields → `{field: value, ...}` |
+| GET | `/api/hash/{key}/hkeys` | Hash: list field names |
+| GET | `/api/hash/{key}/hvals` | Hash: list field values |
+| GET | `/api/hash/{key}/hlen` | Hash: number of fields |
+| GET | `/api/hash/{key}/hexists/{field}` | Hash: check if field exists |
+| POST | `/api/hash/{key}/hincrby/{field}` | Hash: increment field by integer (body: `{"amount": N}`) |
+| POST | `/api/hash/{key}/hincrbyfloat/{field}` | Hash: increment field by float (body: `{"amount": N}`) |
