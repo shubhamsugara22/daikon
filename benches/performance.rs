@@ -118,7 +118,7 @@ fn benchmark_pattern_matching(c: &mut Criterion) {
 
     group.finish();
 }
-
+## TODO: Check new benchmarks to test 
 criterion_group!(
     benches,
     benchmark_basic_operations,
