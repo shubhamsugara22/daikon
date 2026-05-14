@@ -4,7 +4,7 @@ An in-memory key-value store written in Rust with a CLI and an HTTP API (actix-w
 
 ## Features
 
-- **Data types** — String, Integer, Float, Boolean, JSON, HyperLogLog
+- **Data types** — String, Integer, Float, Boolean, JSON, List, Hash, HyperLogLog
 - **TTL** — per-key expiration with manual and automatic cleanup
 - **Persistence** — JSON snapshots, versioned backups, optional gzip/zstd compression
 - **WAL** — write-ahead log for crash recovery, replayed on startup
@@ -210,16 +210,16 @@ curl http://localhost:8080/api/keyspace/config
 | `__keyevent__:evicted` | key name | LRU eviction |
 | `__keyspace__:{key}` | event kind (`set`, `del`, `expired`, `evicted`) | any mutation on that key |
 
-Subscribe via the existing Pub/Sub poll endpoint:
+Subscribe via Pub/Sub channels using the subscribe and poll endpoints:
 
 ```bash
 # Subscribe to all set events
-curl -X POST http://localhost:8080/api/pubsub/subscribe \
-  -H "Content-Type: application/json" \
-  -d '{"channel": "__keyevent__:set", "subscriber_id": "watcher"}'
+curl -X POST http://localhost:8080/api/pubsub/subscribe/__keyevent__:set \
+  -H "Content-Type: application/json"
+# Returns: subscriber_id
 
-# Poll for events
-curl http://localhost:8080/api/pubsub/poll/watcher
+# Poll for messages
+curl http://localhost:8080/api/pubsub/messages/{subscriber_id}
 ```
 
 ## Phase 1: Production Readiness ✅

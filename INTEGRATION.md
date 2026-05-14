@@ -161,7 +161,7 @@ curl -X POST http://localhost:8080/api/pubsub/publish/notifications \
   -d '{"message": "new order received"}'
 
 # Poll for messages
-curl http://localhost:8080/api/pubsub/messages/notifications/{subscriber_id}
+curl http://localhost:8080/api/pubsub/messages/{subscriber_id}
 ```
 
 ### 7. Transactions
@@ -188,7 +188,7 @@ Store structured objects under a single key using field-value pairs — similar 
 
 ```bash
 # Set one or more fields
-curl -X POST http://localhost:8080/api/hash/user:42/hset \
+curl -X PUT http://localhost:8080/api/hash/user:42/hset \
   -H "Content-Type: application/json" \
   -d '{"fields": {"name": "Alice", "age": "30", "city": "Berlin"}}'
 # → 3  (number of fields added)
@@ -389,13 +389,13 @@ Read endpoints (GET) are open. This lets you use Daikon as a shared cache where 
 | POST | `/api/pubsub/subscribe/{ch}` | Subscribe to channel |
 | POST | `/api/pubsub/unsubscribe/{ch}/{id}` | Unsubscribe |
 | POST | `/api/pubsub/publish/{ch}` | Publish message |
-| GET | `/api/pubsub/messages/{ch}/{id}` | Poll messages |
+| GET | `/api/pubsub/messages/{subscriber_id}` | Poll messages |
 | GET | `/api/pubsub/channels` | List channels |
 | POST | `/api/hll/{key}/add` | HyperLogLog add |
 | GET | `/api/hll/{key}/count` | HyperLogLog count |
-| POST | `/api/hll/merge` | HyperLogLog merge |
+| POST | `/api/hll/{destination}/merge` | HyperLogLog merge |
 | POST | `/api/lua/exec` | Execute Lua script |
-| POST | `/api/hash/{key}/hset` | Hash: set fields (body: `{"fields": {...}}`) → number added |
+| PUT | `/api/hash/{key}/hset` | Hash: set fields (body: `{"fields": {...}}`) → number added |
 | GET | `/api/hash/{key}/hget/{field}` | Hash: get one field → string or 404 |
 | POST | `/api/hash/{key}/hmget` | Hash: get multiple fields (body: `{"fields": [...]}`) → `[value\|null, ...]` |
 | DELETE | `/api/hash/{key}/hdel` | Hash: delete fields (body: `{"fields": [...]}`) → number removed |

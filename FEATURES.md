@@ -246,23 +246,7 @@ curl -X POST http://localhost:8080/api/cleanup
 
 ## Complete API Endpoints
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| GET | `/api/keys` | List all keys and values |
-| GET | `/api/keys/{key}` | Get a value |
-| PUT | `/api/keys/{key}` | Set a value |
-| DELETE | `/api/keys/{key}` | Delete a key |
-| POST | `/api/incr/{key}` | Increment integer |
-| POST | `/api/decr/{key}` | Decrement integer |
-| POST | `/api/incrby/{key}` | Increment by amount |
-| POST | `/api/append/{key}` | Append to string |
-| POST | `/api/getset/{key}` | Get and set atomically |
-| POST | `/api/mget` | Get multiple values |
-| POST | `/api/mset` | Set multiple values |
-| GET | `/api/exists/{key}` | Check if key exists |
-| GET | `/api/keys/pattern/{pattern}` | Find keys by pattern |
-| GET | `/api/stats` | Get statistics |
-| POST | `/api/cleanup` | Clean expired keys |
+For the full endpoint reference with request/response details and examples, see [INTEGRATION.md](INTEGRATION.md#full-api-reference).
 
 ## Usage Examples
 
@@ -334,5 +318,6 @@ cargo run -- stats
 
 Potential future enhancements:
 
-- Set and Hash data types
 - Stream/time-series data type
+- Cluster mode with sharding
+- Advanced replication with quorum consensus

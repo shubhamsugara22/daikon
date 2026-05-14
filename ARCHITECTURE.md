@@ -162,9 +162,9 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START([INCR/DECR Request]) --> LOCK{Mutex<br/>Available?}
+    START([INCR/DECR Request]) --> LOCK{RwLock write<br/>acquired?}
     LOCK -->|Wait| LOCK
-    LOCK -->|Acquired| LOOKUP[Lookup Key in HashMap]
+    LOCK -->|Yes| LOOKUP[Lookup Key in HashMap]
     
     LOOKUP --> EXISTS{Key<br/>Exists?}
     EXISTS -->|No| ERR1[Error: Key not found]
@@ -174,10 +174,10 @@ flowchart TD
     CHECK_TYPE -->|Yes| MODIFY[Modify value in-place<br/>*val += amount]
     
     MODIFY --> UPDATE_STATS[Stats: writes++]
-    UPDATE_STATS --> RELEASE[Release Mutex]
+    UPDATE_STATS --> RELEASE[Release write lock]
     RELEASE --> RETURN_NEW[Return New Value]
     
-    ERR1 --> RELEASE_ERR[Release Mutex]
+    ERR1 --> RELEASE_ERR[Release write lock]
     ERR2 --> RELEASE_ERR
     RELEASE_ERR --> RETURN_ERR[Return Error]
     
@@ -390,7 +390,7 @@ flowchart TD
 sequenceDiagram
     participant T1 as Thread 1<br/>(Request A)
     participant T2 as Thread 2<br/>(Request B)
-    participant M as Mutex<KvStore>
+    participant M as RwLock<KvStore>
     participant Store as KvStore
     
     Note over T1,T2: Concurrent requests arrive
