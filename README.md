@@ -18,6 +18,14 @@ An in-memory key-value store written in Rust with a CLI and an HTTP API (actix-w
 - **Keyspace notifications** — Redis-style event channels for key mutations and expirations
 - **Observability** — Prometheus-style `/api/metrics`, health probes, access logging
 
+## Recent additions
+
+- **Hash Map API** — `hset`, `hget`, `hmget`, `hdel`, `hgetall`, `hkeys`, `hvals`, `hlen`, `hexists`, `hincrby`, `hincrbyfloat`
+- **List API** — `lpush`, `rpush`, `lpop`, `rpop`, `lrange`, `llen`
+- **Pipeline endpoint** — batch command execution via `/api/pipeline`
+
+See [INTEGRATION.md](INTEGRATION.md) for end-to-end examples and full request/response shapes.
+
 ## Quick start
 
 ```bash

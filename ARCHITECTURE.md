@@ -361,12 +361,18 @@ flowchart TD
     TYPE -->|Float| FLOAT_OPS[Supported Ops:<br/>set, get]
     TYPE -->|Boolean| BOOL_OPS[Supported Ops:<br/>set, get]
     TYPE -->|JSON| JSON_OPS[Supported Ops:<br/>set, get]
+    TYPE -->|List| LIST_OPS[Supported Ops:<br/>lpush, rpush, lpop, rpop, lrange, llen]
+    TYPE -->|Hash| HASH_OPS[Supported Ops:<br/>hset, hget, hmget, hdel, hgetall, hkeys, hvals, hlen, hexists, hincrby, hincrbyfloat]
+    TYPE -->|HyperLogLog| HLL_OPS[Supported Ops:<br/>pfreserve, pfadd, pfcount, pfmerge, info]
     
     STR_OPS --> EXECUTE{Execute<br/>Operation}
     INT_OPS --> EXECUTE
     FLOAT_OPS --> EXECUTE
     BOOL_OPS --> EXECUTE
     JSON_OPS --> EXECUTE
+    LIST_OPS --> EXECUTE
+    HASH_OPS --> EXECUTE
+    HLL_OPS --> EXECUTE
     
     EXECUTE -->|Valid| SUCCESS[Return Result]
     EXECUTE -->|Invalid| TYPE_ERROR[Return Type Error<br/>'Key is not an integer']
@@ -382,6 +388,36 @@ flowchart TD
     style FLOAT_OPS fill:#ffccbc
     style BOOL_OPS fill:#f8bbd0
     style JSON_OPS fill:#c5cae9
+    style LIST_OPS fill:#dcedc8
+    style HASH_OPS fill:#ffe0b2
+    style HLL_OPS fill:#d1c4e9
+```
+
+## Pipeline Execution Flow
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant API as /api/pipeline
+    participant Store as KvStore
+    participant WAL as WAL
+
+    Client->>API: POST pipeline batch
+    API->>API: Validate payload and command list
+
+    loop For each command
+        API->>API: Parse command and args
+        alt Mutating command
+            API->>WAL: Append WAL entry
+            WAL-->>API: Ack
+            API->>Store: Execute write
+        else Read command
+            API->>Store: Execute read
+        end
+        Store-->>API: Per-command result
+    end
+
+    API-->>Client: Ordered array of command results
 ```
 
 ## Concurrency Model (API Server)
