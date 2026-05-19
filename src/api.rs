@@ -1345,6 +1345,7 @@ pub async fn lua_exec(
 }
 
 // POST /api/pipeline
+// Optimized: Batch WAL writes before store mutations to reduce lock overhead
 pub async fn pipeline_exec(
     http_req: HttpRequest,
     store: WebKvStore,
@@ -1368,10 +1369,89 @@ pub async fn pipeline_exec(
         ));
     }
 
+    // Phase 1: Batch WAL writes for all mutating commands upfront
+    let mut wal_errors: Vec<Option<String>> = Vec::with_capacity(req.commands.len());
+    for cmd in &req.commands {
+        let wal_result = match cmd {
+            // Mutating commands: batch WAL writes
+            PipelineCommand::Set {
+                key,
+                value,
+                ttl_secs,
+            } => {
+                let entry = WalEntry::new(WalOperation::Set {
+                    key: key.clone(),
+                    value: value.clone(),
+                    ttl_secs: *ttl_secs,
+                });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::Delete { key } => {
+                let entry = WalEntry::new(WalOperation::Delete { key: key.clone() });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::Incr { key } => {
+                let entry = WalEntry::new(WalOperation::Incr { key: key.clone() });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::Decr { key } => {
+                let entry = WalEntry::new(WalOperation::Decr { key: key.clone() });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::IncrBy { key, amount } => {
+                let entry = WalEntry::new(WalOperation::IncrBy {
+                    key: key.clone(),
+                    amount: *amount,
+                });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::Append { key, value } => {
+                let entry = WalEntry::new(WalOperation::Append {
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::GetSet { key, value } => {
+                let entry = WalEntry::new(WalOperation::GetSet {
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::LPush { key, values } => {
+                let entry = WalEntry::new(WalOperation::LPush {
+                    key: key.clone(),
+                    values: values.clone(),
+                });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::RPush { key, values } => {
+                let entry = WalEntry::new(WalOperation::RPush {
+                    key: key.clone(),
+                    values: values.clone(),
+                });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::LPop { key } => {
+                let entry = WalEntry::new(WalOperation::LPop { key: key.clone() });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            PipelineCommand::RPop { key } => {
+                let entry = WalEntry::new(WalOperation::RPop { key: key.clone() });
+                wal.append(&entry).err().map(|e| e.to_string())
+            }
+            // Read-only commands: no WAL
+            _ => None,
+        };
+        wal_errors.push(wal_result);
+    }
+
+    // Phase 2: Execute all store operations under single lock
     let mut store = store.write();
     let mut results = Vec::with_capacity(req.commands.len());
 
-    for cmd in &req.commands {
+    for (idx, cmd) in req.commands.iter().enumerate() {
         let result = match cmd {
             PipelineCommand::Get { key } => match store.get(key) {
                 Some(value) => PipelineResult {
@@ -1390,16 +1470,12 @@ pub async fn pipeline_exec(
                 value,
                 ttl_secs,
             } => {
-                let entry = WalEntry::new(WalOperation::Set {
-                    key: key.clone(),
-                    value: value.clone(),
-                    ttl_secs: *ttl_secs,
-                });
-                if let Err(e) = wal.append(&entry) {
+                // WAL already batched in Phase 1, check for errors
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else if let Some(ttl) = ttl_secs {
                     match store.set_with_ttl(key.clone(), value.clone(), Duration::from_secs(*ttl))
@@ -1431,12 +1507,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::Delete { key } => {
-                let entry = WalEntry::new(WalOperation::Delete { key: key.clone() });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.delete(key) {
@@ -1454,12 +1529,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::Incr { key } => {
-                let entry = WalEntry::new(WalOperation::Incr { key: key.clone() });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.incr(key) {
@@ -1477,12 +1551,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::Decr { key } => {
-                let entry = WalEntry::new(WalOperation::Decr { key: key.clone() });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.decr(key) {
@@ -1500,15 +1573,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::IncrBy { key, amount } => {
-                let entry = WalEntry::new(WalOperation::IncrBy {
-                    key: key.clone(),
-                    amount: *amount,
-                });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.incrby(key, *amount) {
@@ -1526,15 +1595,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::Append { key, value } => {
-                let entry = WalEntry::new(WalOperation::Append {
-                    key: key.clone(),
-                    value: value.clone(),
-                });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.append(key, value) {
@@ -1552,15 +1617,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::GetSet { key, value } => {
-                let entry = WalEntry::new(WalOperation::GetSet {
-                    key: key.clone(),
-                    value: value.clone(),
-                });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.getset(key.clone(), value.clone()) {
@@ -1601,15 +1662,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::LPush { key, values } => {
-                let entry = WalEntry::new(WalOperation::LPush {
-                    key: key.clone(),
-                    values: values.clone(),
-                });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.lpush(key, values.clone()) {
@@ -1627,15 +1684,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::RPush { key, values } => {
-                let entry = WalEntry::new(WalOperation::RPush {
-                    key: key.clone(),
-                    values: values.clone(),
-                });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.rpush(key, values.clone()) {
@@ -1653,12 +1706,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::LPop { key } => {
-                let entry = WalEntry::new(WalOperation::LPop { key: key.clone() });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.lpop(key) {
@@ -1676,12 +1728,11 @@ pub async fn pipeline_exec(
                 }
             }
             PipelineCommand::RPop { key } => {
-                let entry = WalEntry::new(WalOperation::RPop { key: key.clone() });
-                if let Err(e) = wal.append(&entry) {
+                if let Some(wal_err) = &wal_errors[idx] {
                     PipelineResult {
                         status: "error".into(),
                         value: None,
-                        error: Some(format!("WAL error: {}", e)),
+                        error: Some(format!("WAL error: {}", wal_err)),
                     }
                 } else {
                     match store.rpop(key) {
