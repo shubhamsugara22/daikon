@@ -114,12 +114,14 @@ pub fn execute_script(store: &mut KvStore, wal: Option<&Wal>, script: &str) -> R
 
         // hset(key, field, value) -> bool
         let store_for_hset = Rc::clone(&store_ref);
-        let hset_fn = scope.create_function_mut(move |_, (key, field, value): (String, String, String)| {
-            let mut store = store_for_hset.borrow_mut();
-            let mut fields = std::collections::HashMap::new();
-            fields.insert(field, value);
-            Ok(store.hset(&key, fields).is_ok())
-        })?;
+        let hset_fn = scope.create_function_mut(
+            move |_, (key, field, value): (String, String, String)| {
+                let mut store = store_for_hset.borrow_mut();
+                let mut fields = std::collections::HashMap::new();
+                fields.insert(field, value);
+                Ok(store.hset(&key, fields).is_ok())
+            },
+        )?;
         globals.set("hset", hset_fn)?;
 
         // hget(key, field) -> Option<String>

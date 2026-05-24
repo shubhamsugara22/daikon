@@ -58,11 +58,18 @@ pub enum WalOperation {
     #[serde(rename = "PERSIST")]
     Persist { key: String },
     #[serde(rename = "HSET")]
-    HSet { key: String, fields: HashMap<String, String> },
+    HSet {
+        key: String,
+        fields: HashMap<String, String>,
+    },
     #[serde(rename = "HDEL")]
     HDel { key: String, fields: Vec<String> },
     #[serde(rename = "HINCRBY")]
-    HIncrBy { key: String, field: String, amount: i64 },
+    HIncrBy {
+        key: String,
+        field: String,
+        amount: i64,
+    },
 }
 
 impl WalEntry {
