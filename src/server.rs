@@ -9,6 +9,7 @@ use rust_kv_store::replication::{ReplicationMaster, ReplicationReplica, Replicat
 use rust_kv_store::wal::{Wal, WalOperation};
 use rust_kv_store::{
     api::{self, ApiRuntimeConfig},
+    config::StoreConfig,
     kv_store::KvStore,
 };
 use std::env;
@@ -73,6 +74,10 @@ async fn main() -> std::io::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(25000);
+    let max_memory_bytes: usize = env::var("KV_MAX_MEMORY_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| StoreConfig::default().max_memory_bytes);
     let cors_origin = env::var("KV_CORS_ORIGIN").ok();
 
     // Replication configuration
@@ -108,8 +113,9 @@ async fn main() -> std::io::Result<()> {
         lua_enabled, max_lua_script_bytes
     );
     info!(
-        "Server limits: max_payload={}B, max_connections={}, workers={}",
+        "Server limits: max_payload={}B, max_memory={}B, max_connections={}, workers={}",
         max_payload_bytes,
+        max_memory_bytes,
         max_connections,
         if workers == 0 {
             "auto".to_string()
@@ -166,8 +172,11 @@ async fn main() -> std::io::Result<()> {
         None
     };
 
+    let mut store_config = StoreConfig::default();
+    store_config.max_memory_bytes = max_memory_bytes;
+
     // Load existing store if file exists
-    let kv_store = if store_path.exists() {
+    let mut kv_store = if store_path.exists() {
         match KvStore::load_from_file(&store_path) {
             Ok(loaded) => {
                 info!("Loaded existing store from {:?}", store_path);
@@ -182,6 +191,7 @@ async fn main() -> std::io::Result<()> {
         info!("Creating new store");
         KvStore::new()
     };
+    kv_store.set_config(store_config);
 
     // Replay WAL entries to ensure durability
     let mut kv_store = match replay_wal(&wal, kv_store) {

@@ -6,7 +6,8 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       KV_BIND: "0.0.0.0:8080"
-      KV_API_KEY: "${KV_API_KEY}"
+      KV_API_KEY: "${KV_API_KEY:?KV_API_KEY must be set}"
+      KV_MAX_MEMORY_BYTES: "1073741824"
       KV_SNAPSHOT_INTERVAL_SECS: "300"
       KV_SNAPSHOT_COMPRESSION: "zstd"
       KV_MAX_PAYLOAD_BYTES: "16777216"
