@@ -12,6 +12,9 @@ services:
       KV_SNAPSHOT_COMPRESSION: "zstd"
       KV_MAX_PAYLOAD_BYTES: "16777216"
       KV_MAX_CONNECTIONS: "25000"
+      KV_RATE_LIMIT_ENABLED: "true"
+      KV_RATE_LIMIT_PER_SECOND: "50"
+      KV_RATE_LIMIT_BURST: "100"
       KV_ENABLE_LUA: "true"
       RUST_LOG: "info"
     volumes:

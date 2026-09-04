@@ -137,6 +137,9 @@ All settings are via environment variables. Defaults are shown.
 | `KV_WORKERS` | _cpu count_ | Actix worker threads |
 | `KV_MAX_CONNECTIONS` | `25000` | Max concurrent connections |
 | `KV_CORS_ORIGIN` | _(none)_ | Allowed CORS origin (omit for permissive) |
+| `KV_RATE_LIMIT_ENABLED` | `true` | Enable per-IP request rate limiting |
+| `KV_RATE_LIMIT_PER_SECOND` | `50` | Sustained requests/sec allowed per IP |
+| `KV_RATE_LIMIT_BURST` | `100` | Burst capacity per IP before throttling |
 | `KV_NODE_ROLE` | `master` | `master` or `replica` |
 | `KV_MASTER_URL` | _(none)_ | Master URL (replicas only) |
 | `KV_REPLICA_ID` | auto | Replica identifier |

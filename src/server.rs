@@ -1,4 +1,5 @@
 use actix_cors::Cors;
+use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::http::header;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{web, App, HttpServer};
@@ -80,6 +81,27 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or_else(|| StoreConfig::default().max_memory_bytes);
     let cors_origin = env::var("KV_CORS_ORIGIN").ok();
 
+    // Per-IP rate limiting
+    let rate_limit_enabled = env::var("KV_RATE_LIMIT_ENABLED")
+        .ok()
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no"
+            )
+        })
+        .unwrap_or(true);
+    let rate_limit_per_second: u64 = env::var("KV_RATE_LIMIT_PER_SECOND")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(50)
+        .max(1);
+    let rate_limit_burst: u32 = env::var("KV_RATE_LIMIT_BURST")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100)
+        .max(1);
+
     // Replication configuration
     let node_role = env::var("KV_NODE_ROLE")
         .unwrap_or_else(|_| "master".into())
@@ -123,6 +145,23 @@ async fn main() -> std::io::Result<()> {
             workers.to_string()
         }
     );
+    if rate_limit_enabled {
+        info!(
+            "Per-IP rate limiting ENABLED: {} req/s sustained, burst={}",
+            rate_limit_per_second, rate_limit_burst
+        );
+    } else {
+        info!("Per-IP rate limiting DISABLED (set KV_RATE_LIMIT_ENABLED=true to enable)");
+    }
+
+    // permissive() keeps the middleware type identical whether limiting is on or off,
+    // so it can always be wrapped unconditionally in the App builder below.
+    let governor_conf = GovernorConfigBuilder::default()
+        .requests_per_second(rate_limit_per_second)
+        .burst_size(rate_limit_burst)
+        .permissive(!rate_limit_enabled)
+        .finish()
+        .expect("invalid rate limit configuration: per-second and burst must be > 0");
 
     info!("Node role: {:?}", replication_role);
     if replication_role == ReplicationRole::Replica {
@@ -344,6 +383,7 @@ async fn main() -> std::io::Result<()> {
     };
 
     let cors_origin_for_server = cors_origin.clone();
+    let governor_conf_for_server = governor_conf.clone();
 
     let server = HttpServer::new(move || {
         // CORS configuration
@@ -367,6 +407,7 @@ async fn main() -> std::io::Result<()> {
 
         let mut app = App::new()
             .wrap(cors)
+            .wrap(Governor::new(&governor_conf_for_server))
             .wrap(actix_web::middleware::Logger::new("%a \"%r\" %s %b %Dms"))
             .wrap(
                 DefaultHeaders::new()
