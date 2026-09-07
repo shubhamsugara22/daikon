@@ -130,6 +130,7 @@ All settings are via environment variables. Defaults are shown.
 | `KV_SNAPSHOT_INTERVAL_SECS` | `0` (disabled) | Auto-snapshot interval |
 | `KV_TTL_CLEANUP_INTERVAL_SECS` | `0` (disabled) | Background expired-key cleanup interval |
 | `KV_SNAPSHOT_COMPRESSION` | `none` | Snapshot compression: `none`, `gzip`, `zstd` |
+| `KV_AT_REST_KEY` | _(none)_ | Optional 32-byte hex/base64 key for AES-256-GCM WAL and snapshot encryption |
 | `KV_API_KEY` | _(none)_ | API key for mutating endpoints (`x-api-key` or `Bearer`) |
 | `KV_ENABLE_LUA` | `true` | Enable/disable Lua over HTTP |
 | `KV_MAX_LUA_SCRIPT_BYTES` | `16384` | Max Lua script payload size |
