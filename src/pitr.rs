@@ -1,3 +1,4 @@
+use crate::crypto;
 use crate::error::{KvStoreError, Result};
 use crate::kv_store::KvStore;
 use crate::wal::{Wal, WalEntry, WalOperation};
@@ -5,8 +6,7 @@ use flate2::Compression;
 use flate2::{read::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
@@ -39,7 +39,17 @@ impl SnapshotCompression {
         }
     }
 
+    fn encrypted_suffix(self) -> String {
+        let suffix = self.file_suffix();
+        if crypto::enabled() {
+            format!("{}.enc", suffix)
+        } else {
+            suffix.to_string()
+        }
+    }
+
     fn from_snapshot_filename(filename: &str) -> Option<Self> {
+        let filename = filename.strip_suffix(".enc").unwrap_or(filename);
         if filename.ends_with(".json") {
             Some(SnapshotCompression::None)
         } else if filename.ends_with(".json.gz") {
@@ -115,45 +125,30 @@ impl Pitr {
             .unwrap_or_default()
             .as_secs();
 
-        let mut snapshot_filename = format!(
-            "snapshot_{}{}",
-            timestamp,
-            self.snapshot_compression.file_suffix()
-        );
+        let suffix = self.snapshot_compression.encrypted_suffix();
+        let mut snapshot_filename = format!("snapshot_{}{}", timestamp, suffix);
         let mut snapshot_path = self.snapshots_dir.join(&snapshot_filename);
         let mut suffix = 1u64;
         while snapshot_path.exists() {
-            snapshot_filename = format!(
-                "snapshot_{}_{}{}",
-                timestamp,
-                suffix,
-                self.snapshot_compression.file_suffix()
-            );
+            snapshot_filename = format!("snapshot_{}_{}{}", timestamp, suffix, suffix);
             snapshot_path = self.snapshots_dir.join(&snapshot_filename);
             suffix += 1;
         }
 
-        let file = File::create(&snapshot_path).map_err(KvStoreError::IoError)?;
-        match self.snapshot_compression {
-            SnapshotCompression::None => {
-                let writer = BufWriter::new(file);
-                serde_json::to_writer_pretty(writer, &store)
-                    .map_err(KvStoreError::SerializationError)?;
-            }
+        let json = serde_json::to_vec_pretty(&store).map_err(KvStoreError::SerializationError)?;
+        let compressed = match self.snapshot_compression {
+            SnapshotCompression::None => json,
             SnapshotCompression::Gzip => {
-                let writer = BufWriter::new(file);
-                let encoder = GzEncoder::new(writer, Compression::default());
-                serde_json::to_writer_pretty(encoder, &store)
-                    .map_err(KvStoreError::SerializationError)?;
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(&json).map_err(KvStoreError::IoError)?;
+                encoder.finish().map_err(KvStoreError::IoError)?
             }
             SnapshotCompression::Zstd => {
-                let writer = BufWriter::new(file);
-                let mut encoder = zstd::Encoder::new(writer, 3).map_err(KvStoreError::IoError)?;
-                serde_json::to_writer_pretty(&mut encoder, &store)
-                    .map_err(KvStoreError::SerializationError)?;
-                encoder.finish().map_err(KvStoreError::IoError)?;
+                zstd::stream::encode_all(json.as_slice(), 3).map_err(KvStoreError::IoError)?
             }
-        }
+        };
+        let snapshot_bytes = crypto::encrypt(&compressed).map_err(KvStoreError::OperationFailed)?;
+        fs::write(&snapshot_path, snapshot_bytes).map_err(KvStoreError::IoError)?;
 
         let num_keys = store.len();
         let num_operations = self.wal.read_all()?.len() as u64;
@@ -213,7 +208,9 @@ impl Pitr {
         let mut store = if let Some(snapshot) = base_snapshot {
             // Load from snapshot
             let snapshot_path = self.snapshots_dir.join(&snapshot.snapshot_file);
-            let file = File::open(&snapshot_path).map_err(KvStoreError::IoError)?;
+            let snapshot_bytes = fs::read(&snapshot_path).map_err(KvStoreError::IoError)?;
+            let snapshot_bytes =
+                crypto::decrypt(&snapshot_bytes).map_err(KvStoreError::OperationFailed)?;
             let compression = SnapshotCompression::from_snapshot_filename(&snapshot.snapshot_file)
                 .ok_or_else(|| {
                     KvStoreError::OperationFailed(format!(
@@ -223,18 +220,15 @@ impl Pitr {
                 })?;
 
             match compression {
-                SnapshotCompression::None => {
-                    let reader = BufReader::new(file);
-                    serde_json::from_reader(reader).map_err(KvStoreError::SerializationError)?
-                }
+                SnapshotCompression::None => serde_json::from_slice(&snapshot_bytes)
+                    .map_err(KvStoreError::SerializationError)?,
                 SnapshotCompression::Gzip => {
-                    let reader = BufReader::new(file);
-                    let decoder = GzDecoder::new(reader);
+                    let decoder = GzDecoder::new(BufReader::new(Cursor::new(snapshot_bytes)));
                     serde_json::from_reader(decoder).map_err(KvStoreError::SerializationError)?
                 }
                 SnapshotCompression::Zstd => {
-                    let reader = BufReader::new(file);
-                    let decoder = zstd::Decoder::new(reader).map_err(KvStoreError::IoError)?;
+                    let decoder = zstd::Decoder::new(BufReader::new(Cursor::new(snapshot_bytes)))
+                        .map_err(KvStoreError::IoError)?;
                     serde_json::from_reader(decoder).map_err(KvStoreError::SerializationError)?
                 }
             }

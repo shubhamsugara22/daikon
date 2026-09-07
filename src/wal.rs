@@ -1,3 +1,4 @@
+use crate::crypto;
 use crate::error::{KvStoreError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -113,9 +114,12 @@ impl Wal {
     pub fn append(&self, entry: &WalEntry) -> Result<()> {
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
 
-        let json_line = serde_json::to_string(entry).map_err(KvStoreError::SerializationError)?;
+        let json_line = serde_json::to_vec(entry).map_err(KvStoreError::SerializationError)?;
+        let encoded_line = crypto::encrypt(&json_line).map_err(KvStoreError::OperationFailed)?;
 
-        writeln!(file, "{}", json_line).map_err(KvStoreError::IoError)?;
+        file.write_all(&encoded_line)
+            .map_err(KvStoreError::IoError)?;
+        file.write_all(b"\n").map_err(KvStoreError::IoError)?;
 
         debug!("WAL entry logged: {:?}", entry.operation);
         Ok(())
@@ -141,7 +145,14 @@ impl Wal {
                 continue;
             }
 
-            match serde_json::from_str::<WalEntry>(&line) {
+            let decrypted = crypto::decrypt(line.as_bytes()).map_err(|e| {
+                KvStoreError::OperationFailed(format!(
+                    "Failed to decrypt WAL line {}: {}",
+                    line_no, e
+                ))
+            })?;
+
+            match serde_json::from_slice::<WalEntry>(&decrypted) {
                 Ok(entry) => entries.push(entry),
                 Err(e) => {
                     warn!("Failed to parse WAL entry at line {}: {}", line_no, e);

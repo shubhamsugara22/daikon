@@ -28,6 +28,9 @@ reqwest = { version = "0.11", features = [
 	"json",
 ] } # HTTP client for replication
 actix-governor = "0.10.0"
+aes-gcm = "0.11.1"
+base64 = "0.23.1"
+hex = "0.4.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = [
