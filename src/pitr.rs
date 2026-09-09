@@ -81,6 +81,7 @@ pub struct Pitr {
 
 impl Pitr {
     fn extract_snapshot_timestamp(filename: &str) -> Option<u64> {
+        let filename = filename.strip_suffix(".enc").unwrap_or(filename);
         let core = filename
             .strip_prefix("snapshot_")?
             .strip_suffix(".json")
@@ -125,12 +126,12 @@ impl Pitr {
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        let suffix = self.snapshot_compression.encrypted_suffix();
-        let mut snapshot_filename = format!("snapshot_{}{}", timestamp, suffix);
+        let extension = self.snapshot_compression.encrypted_suffix();
+        let mut snapshot_filename = format!("snapshot_{}{}", timestamp, extension);
         let mut snapshot_path = self.snapshots_dir.join(&snapshot_filename);
         let mut suffix = 1u64;
         while snapshot_path.exists() {
-            snapshot_filename = format!("snapshot_{}_{}{}", timestamp, suffix, suffix);
+            snapshot_filename = format!("snapshot_{}_{}{}", timestamp, suffix, extension);
             snapshot_path = self.snapshots_dir.join(&snapshot_filename);
             suffix += 1;
         }
@@ -279,7 +280,7 @@ impl Pitr {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() as u64;
+            .as_secs();
 
         let cutoff_time = now.saturating_sub(max_age_secs);
         let mut deleted_count = 0;
@@ -416,6 +417,9 @@ mod tests {
 
     #[test]
     fn test_pitr_create_snapshot() {
+        let _guard = crate::crypto::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("KV_AT_REST_KEY");
+
         let temp_dir = TempDir::new().unwrap();
         let snapshots_dir = temp_dir.path().join("snapshots");
         let wal_dir = temp_dir.path().join("wal");
@@ -433,12 +437,15 @@ mod tests {
 
     #[test]
     fn test_pitr_list_snapshots() {
+        let _guard = crate::crypto::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("KV_AT_REST_KEY");
+
         let temp_dir = TempDir::new().unwrap();
         let snapshots_dir = temp_dir.path().join("snapshots");
         let wal_dir = temp_dir.path().join("wal");
         let wal = std::sync::Arc::new(Wal::new(wal_dir.join("test.wal")).unwrap());
 
-        let pitr = Pitr::new(snapshots_dir, wal).unwrap();
+        let pitr = Pitr::new(snapshots_dir.clone(), wal).unwrap();
         let store = KvStore::new();
 
         pitr.create_snapshot(&store).unwrap();
@@ -450,6 +457,9 @@ mod tests {
 
     #[test]
     fn test_pitr_recovery_stats() {
+        let _guard = crate::crypto::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("KV_AT_REST_KEY");
+
         let temp_dir = TempDir::new().unwrap();
         let snapshots_dir = temp_dir.path().join("snapshots");
         let wal_dir = temp_dir.path().join("wal");
@@ -463,6 +473,9 @@ mod tests {
 
     #[test]
     fn test_pitr_snapshot_gzip_roundtrip() {
+        let _guard = crate::crypto::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("KV_AT_REST_KEY");
+
         let temp_dir = TempDir::new().unwrap();
         let snapshots_dir = temp_dir.path().join("snapshots");
         let wal_dir = temp_dir.path().join("wal");
@@ -482,6 +495,9 @@ mod tests {
 
     #[test]
     fn test_pitr_snapshot_zstd_roundtrip() {
+        let _guard = crate::crypto::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("KV_AT_REST_KEY");
+
         let temp_dir = TempDir::new().unwrap();
         let snapshots_dir = temp_dir.path().join("snapshots");
         let wal_dir = temp_dir.path().join("wal");

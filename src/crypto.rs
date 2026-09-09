@@ -72,11 +72,15 @@ pub fn decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn plaintext_roundtrip_without_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("KV_AT_REST_KEY");
         let data = b"wal-entry";
         assert_eq!(decrypt(&encrypt(data).unwrap()).unwrap(), data);
@@ -84,6 +88,7 @@ mod tests {
 
     #[test]
     fn encrypted_roundtrip_with_hex_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var(
             "KV_AT_REST_KEY",
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
