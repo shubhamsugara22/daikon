@@ -123,7 +123,7 @@ impl Pitr {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_nanos() as u64;
 
         let suffix = self.snapshot_compression.encrypted_suffix();
         let mut snapshot_filename = format!("snapshot_{}{}", timestamp, suffix);
@@ -279,7 +279,7 @@ impl Pitr {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_nanos() as u64;
 
         let cutoff_time = now.saturating_sub(max_age_secs);
         let mut deleted_count = 0;
