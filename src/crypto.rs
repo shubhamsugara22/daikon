@@ -36,9 +36,9 @@ pub fn encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         Aes256Gcm::new_from_slice(&key).map_err(|_| "invalid encryption key".to_string())?;
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     getrandom::fill(&mut nonce_bytes).map_err(|_| "random nonce generation failed".to_string())?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::try_from(&nonce_bytes[..]).map_err(|_| "invalid nonce".to_string())?;
     let ciphertext = cipher
-        .encrypt(nonce, data)
+        .encrypt(&nonce, data)
         .map_err(|_| "encryption failed".to_string())?;
 
     let mut payload = nonce_bytes.to_vec();
@@ -63,11 +63,10 @@ pub fn decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
 
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|_| "invalid encryption key".to_string())?;
+    let nonce = Nonce::try_from(&payload[..NONCE_SIZE])
+        .map_err(|_| "invalid encrypted data".to_string())?;
     cipher
-        .decrypt(
-            Nonce::from_slice(&payload[..NONCE_SIZE]),
-            &payload[NONCE_SIZE..],
-        )
+        .decrypt(&nonce, &payload[NONCE_SIZE..])
         .map_err(|_| "decryption failed; check KV_AT_REST_KEY".to_string())
 }
 
