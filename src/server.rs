@@ -211,8 +211,10 @@ async fn main() -> std::io::Result<()> {
         None
     };
 
-    let mut store_config = StoreConfig::default();
-    store_config.max_memory_bytes = max_memory_bytes;
+    let store_config = StoreConfig {
+        max_memory_bytes,
+        ..StoreConfig::default()
+    };
 
     // Load existing store if file exists
     let mut kv_store = if store_path.exists() {
