@@ -8,7 +8,7 @@ default-run = "rust_kv_store"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4.4", features = ["derive"] }
-actix-web = "4.4"
+actix-web = { version = "4.11", features = ["rustls-0_23"] }
 actix-rt = "2.9"
 actix-cors = "0.7"
 tokio = { version = "1.33", features = ["full"] }
@@ -32,6 +32,8 @@ aes-gcm = "0.11.1"
 base64 = "0.23.1"
 hex = "0.4.3"
 getrandom = "0.4.3"
+rustls = "0.23"
+rustls-pemfile = "2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = [
