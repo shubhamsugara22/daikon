@@ -29,9 +29,9 @@ ENV KV_STORE_PATH=/app/data/server_store.json
 ENV KV_WAL_PATH=/app/data/server.wal
 ENV KV_SNAPSHOTS_DIR=/app/snapshots
 
-EXPOSE 8080
+EXPOSE 8080 8443
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
-	CMD curl -sf http://localhost:8080/api/health/live || exit 1
+	CMD sh -c 'if [ -n "$KV_TLS_CERT" ]; then curl -kfsS https://localhost:8443/api/health/live; else curl -fsS http://localhost:8080/api/health/live; fi' || exit 1
 
 CMD ["server"]

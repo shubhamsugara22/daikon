@@ -13,8 +13,11 @@ use rust_kv_store::{
     config::StoreConfig,
     kv_store::KvStore,
 };
+use rustls::ServerConfig;
 use std::env;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufReader, ErrorKind};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
@@ -80,6 +83,30 @@ async fn main() -> std::io::Result<()> {
         .and_then(|value| value.parse().ok())
         .unwrap_or_else(|| StoreConfig::default().max_memory_bytes);
     let cors_origin = env::var("KV_CORS_ORIGIN").ok();
+
+    // Optional native TLS/HTTPS configuration
+    let tls_cert_path = env::var("KV_TLS_CERT")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let tls_key_path = env::var("KV_TLS_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let tls_config = match (tls_cert_path, tls_key_path) {
+        (Some(cert), Some(key)) => Some(load_tls_config(Path::new(&cert), Path::new(&key))?),
+        (Some(_), None) => {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "KV_TLS_KEY must be set when KV_TLS_CERT is configured",
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "KV_TLS_CERT must be set when KV_TLS_KEY is configured",
+            ))
+        }
+        (None, None) => None,
+    };
 
     // Per-IP rate limiting
     let rate_limit_enabled = env::var("KV_RATE_LIMIT_ENABLED")
@@ -373,7 +400,11 @@ async fn main() -> std::io::Result<()> {
         None
     };
 
-    info!("Starting server at http://{}", bind);
+    if tls_config.is_some() {
+        info!("Starting server with TLS at https://{}", bind);
+    } else {
+        info!("Starting server at http://{}", bind);
+    }
 
     let replication_master_for_server = replication_master.clone();
     let replication_replica_for_server = replication_replica_instance.clone();
@@ -576,7 +607,11 @@ async fn main() -> std::io::Result<()> {
         server
     };
 
-    let server = server.bind(&bind)?.run();
+    let server = if let Some(tls_config) = tls_config {
+        server.bind_rustls_0_23(&bind, tls_config)?.run()
+    } else {
+        server.bind(&bind)?.run()
+    };
 
     let server_handle = server.handle();
 
@@ -599,6 +634,37 @@ async fn main() -> std::io::Result<()> {
     });
 
     server.await
+}
+
+fn load_tls_config(cert_path: &Path, key_path: &Path) -> std::io::Result<ServerConfig> {
+    let mut cert_reader = BufReader::new(File::open(cert_path)?);
+    let cert_chain =
+        rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, std::io::Error>>()?;
+    if cert_chain.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "TLS certificate file contains no PEM certificates: {}",
+                cert_path.display()
+            ),
+        ));
+    }
+
+    let mut key_reader = BufReader::new(File::open(key_path)?);
+    let private_key = rustls_pemfile::private_key(&mut key_reader)?.ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "TLS key file contains no supported PEM private key: {}",
+                key_path.display()
+            ),
+        )
+    })?;
+
+    ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, private_key)
+        .map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))
 }
 
 /// Drain pending keyspace events from the store and publish them to PubSub channels.

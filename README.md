@@ -138,6 +138,8 @@ All settings are via environment variables. Defaults are shown.
 | `KV_WORKERS` | _cpu count_ | Actix worker threads |
 | `KV_MAX_CONNECTIONS` | `25000` | Max concurrent connections |
 | `KV_CORS_ORIGIN` | _(none)_ | Allowed CORS origin (omit for permissive) |
+| `KV_TLS_CERT` | _(none)_ | PEM certificate chain path; enables native HTTPS when paired with `KV_TLS_KEY` |
+| `KV_TLS_KEY` | _(none)_ | PEM private key path; enables native HTTPS when paired with `KV_TLS_CERT` |
 | `KV_RATE_LIMIT_ENABLED` | `true` | Enable per-IP request rate limiting |
 | `KV_RATE_LIMIT_PER_SECOND` | `50` | Sustained requests/sec allowed per IP |
 | `KV_RATE_LIMIT_BURST` | `100` | Burst capacity per IP before throttling |
@@ -160,6 +162,20 @@ docker run --rm -p 8080:8080 \
 ```
 
 A production-ready `docker-compose.yml` is included with resource limits, read-only filesystem, and named volumes.
+
+Native HTTPS example:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout daikon-key.pem -out daikon-cert.pem -subj '/CN=localhost'
+
+KV_BIND=0.0.0.0:8443 \
+KV_TLS_CERT=./daikon-cert.pem \
+KV_TLS_KEY=./daikon-key.pem \
+cargo run --bin server
+```
+
+For Docker, mount the PEM files read-only and set `KV_TLS_CERT` and `KV_TLS_KEY` to their container paths, for example `-v "$PWD/certs:/certs:ro" -p 8443:8443`.
 
 ## Project layout
 
