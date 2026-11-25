@@ -7,6 +7,12 @@ pub struct Cli {
     #[arg(short, long, value_name = "FILE")]
     pub file: Option<PathBuf>,
 
+    #[arg(long, value_name = "FILE", default_value = "server.wal")]
+    pub wal_file: PathBuf,
+
+    #[arg(long, value_name = "DIR", default_value = "snapshots")]
+    pub snapshots_dir: PathBuf,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -32,6 +38,10 @@ pub enum Commands {
         #[arg(short, long, default_value = "2")]
         versions: usize,
     },
+    /// Create a PITR snapshot of the current store
+    Backup,
+    /// Restore the latest snapshot, or the latest snapshot at/before TIMESTAMP
+    Restore { timestamp: Option<u64> },
     /// Load the store from file
     Load,
     /// Increment an integer value

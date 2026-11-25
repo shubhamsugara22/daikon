@@ -4,9 +4,12 @@ use rust_kv_store::{
     cli::{Cli, Commands},
     kv_store::KvStore,
     lua,
+    pitr::Pitr,
+    wal::Wal,
 };
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
@@ -25,6 +28,8 @@ fn main() {
 
     let default_path = PathBuf::from("store.json");
     let file_path = cli.file.unwrap_or(default_path);
+    let wal_path = cli.wal_file;
+    let snapshots_dir = cli.snapshots_dir;
 
     // Load existing store if file exists
     if file_path.exists() {
@@ -73,6 +78,35 @@ fn main() {
             match store.save_with_version(&file_path, versions) {
                 Ok(_) => println!("Store saved successfully to {:?}", file_path),
                 Err(e) => eprintln!("Error saving store: {}", e),
+            }
+        }
+        Commands::Backup => {
+            should_save = false;
+            let result = Wal::new(&wal_path)
+                .and_then(|wal| Pitr::new(&snapshots_dir, Arc::new(wal)))
+                .and_then(|pitr| pitr.create_snapshot(&store));
+            match result {
+                Ok(snapshot) => println!(
+                    "Snapshot created: {} ({} keys)",
+                    snapshot.snapshot_file, snapshot.num_keys
+                ),
+                Err(e) => eprintln!("Error creating snapshot: {}", e),
+            }
+        }
+        Commands::Restore { timestamp } => {
+            should_save = false;
+            let result = Wal::new(&wal_path)
+                .and_then(|wal| Pitr::new(&snapshots_dir, Arc::new(wal)))
+                .and_then(|pitr| match timestamp {
+                    Some(timestamp) => pitr.recover_to_timestamp(timestamp),
+                    None => pitr.recover_to_latest_snapshot(),
+                });
+            match result {
+                Ok(restored_store) => match restored_store.save_with_version(&file_path, 3) {
+                    Ok(_) => println!("Store restored successfully to {:?}", file_path),
+                    Err(e) => eprintln!("Error saving restored store: {}", e),
+                },
+                Err(e) => eprintln!("Error restoring snapshot: {}", e),
             }
         }
         Commands::Load => {

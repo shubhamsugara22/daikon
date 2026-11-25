@@ -68,7 +68,14 @@ cargo run -- lua --script "setex('session','token',300); return ttl('session'), 
 # Persistence
 cargo run -- save --versions 3
 cargo run -- stats
+
+# PITR backups (defaults: ./snapshots and ./server.wal)
+cargo run -- backup
+cargo run -- restore                 # restore latest snapshot
+cargo run -- restore 1735689600      # restore to a Unix timestamp
 ```
+
+Use `--file`, `--wal-file`, and `--snapshots-dir` before the command to select the store file, WAL, and snapshot directory. For example: `cargo run -- --file data/store.json --wal-file data/server.wal --snapshots-dir data/snapshots backup`.
 
 ### HTTP server
 
