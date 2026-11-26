@@ -42,6 +42,8 @@ pub enum Commands {
     Backup,
     /// Restore the latest snapshot, or the latest snapshot at/before TIMESTAMP
     Restore { timestamp: Option<u64> },
+    /// Re-encrypt WAL records and snapshots with KV_AT_REST_KEY
+    RotateKey,
     /// Load the store from file
     Load,
     /// Increment an integer value

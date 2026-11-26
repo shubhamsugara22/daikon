@@ -2,33 +2,49 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use std::fs;
+use std::path::Path;
 
 const PREFIX: &str = "DAIKON-ENC1:";
 const NONCE_SIZE: usize = 12;
 
-fn key_from_env() -> Result<Option<[u8; 32]>, String> {
-    let Some(raw) = std::env::var("KV_AT_REST_KEY")
+fn decode_key(raw: &str) -> Result<[u8; 32], String> {
+    let decoded = hex::decode(raw)
+        .or_else(|_| STANDARD.decode(&raw))
+        .map_err(|_| "encryption keys must be 32-byte hex or base64".to_string())?;
+    decoded
+        .try_into()
+        .map_err(|_| "encryption keys must decode to exactly 32 bytes".to_string())
+}
+
+fn keys_from_env() -> Result<(Option<[u8; 32]>, Vec<[u8; 32]>), String> {
+    let active = std::env::var("KV_AT_REST_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-
-    let decoded = hex::decode(&raw)
-        .or_else(|_| STANDARD.decode(&raw))
-        .map_err(|_| "KV_AT_REST_KEY must be 32-byte hex or base64".to_string())?;
-    let key: [u8; 32] = decoded
-        .try_into()
-        .map_err(|_| "KV_AT_REST_KEY must decode to exactly 32 bytes".to_string())?;
-    Ok(Some(key))
+        .map(|value| decode_key(value.trim()))
+        .transpose()?;
+    let previous = std::env::var("KV_AT_REST_OLD_KEYS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(decode_key)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((active, previous))
 }
 
 pub fn enabled() -> bool {
-    key_from_env().map(|key| key.is_some()).unwrap_or(false)
+    keys_from_env()
+        .map(|(active, _)| active.is_some())
+        .unwrap_or(false)
 }
 
 pub fn encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
-    let Some(key) = key_from_env()? else {
+    let (active_key, previous_keys) = keys_from_env()?;
+    let Some(key) = active_key else {
+        if !previous_keys.is_empty() {
+            return Err("KV_AT_REST_KEY must be set when previous keys are configured".to_string());
+        }
         return Ok(data.to_vec());
     };
 
@@ -51,9 +67,6 @@ pub fn decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         return Ok(data.to_vec());
     }
 
-    let Some(key) = key_from_env()? else {
-        return Err("encrypted data requires KV_AT_REST_KEY".to_string());
-    };
     let payload = STANDARD
         .decode(&data[PREFIX.len()..])
         .map_err(|_| "invalid encrypted data".to_string())?;
@@ -61,13 +74,39 @@ pub fn decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("invalid encrypted data".to_string());
     }
 
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|_| "invalid encryption key".to_string())?;
-    let nonce = Nonce::try_from(&payload[..NONCE_SIZE])
-        .map_err(|_| "invalid encrypted data".to_string())?;
-    cipher
-        .decrypt(&nonce, &payload[NONCE_SIZE..])
-        .map_err(|_| "decryption failed; check KV_AT_REST_KEY".to_string())
+    let (active_key, previous_keys) = keys_from_env()?;
+    let mut has_key = false;
+    for key in active_key.into_iter().chain(previous_keys) {
+        has_key = true;
+        let cipher =
+            Aes256Gcm::new_from_slice(&key).map_err(|_| "invalid encryption key".to_string())?;
+        let nonce = Nonce::try_from(&payload[..NONCE_SIZE])
+            .map_err(|_| "invalid encrypted data".to_string())?;
+        if let Ok(plaintext) = cipher.decrypt(&nonce, &payload[NONCE_SIZE..]) {
+            return Ok(plaintext);
+        }
+    }
+    if !has_key {
+        return Err("encrypted data requires KV_AT_REST_KEY".to_string());
+    }
+    Err("decryption failed; check KV_AT_REST_KEY and KV_AT_REST_OLD_KEYS".to_string())
+}
+
+pub fn reencrypt(data: &[u8]) -> Result<Vec<u8>, String> {
+    if !enabled() {
+        return Err("KV_AT_REST_KEY must be set to rotate encrypted data".to_string());
+    }
+    encrypt(&decrypt(data)?)
+}
+
+pub(crate) fn replace_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let temp_path = path.with_extension("rotate.tmp");
+    fs::write(&temp_path, contents).map_err(|error| error.to_string())?;
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error.to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -96,6 +135,29 @@ mod tests {
         let encrypted = encrypt(data).unwrap();
         assert!(encrypted.starts_with(PREFIX.as_bytes()));
         assert_eq!(decrypt(&encrypted).unwrap(), data);
+        std::env::remove_var("KV_AT_REST_KEY");
+    }
+
+    #[test]
+    fn decrypts_previous_key_and_reencrypts_with_active_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const OLD_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        const NEW_KEY: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+        std::env::set_var("KV_AT_REST_KEY", OLD_KEY);
+        std::env::remove_var("KV_AT_REST_OLD_KEYS");
+        let old_ciphertext = encrypt(b"rotation-check").unwrap();
+
+        std::env::set_var("KV_AT_REST_KEY", NEW_KEY);
+        std::env::set_var("KV_AT_REST_OLD_KEYS", OLD_KEY);
+        assert_eq!(decrypt(&old_ciphertext).unwrap(), b"rotation-check");
+
+        let rotated = reencrypt(&old_ciphertext).unwrap();
+        assert_eq!(decrypt(&rotated).unwrap(), b"rotation-check");
+
+        std::env::remove_var("KV_AT_REST_OLD_KEYS");
+        assert!(decrypt(&rotated).is_ok());
+        assert!(decrypt(&old_ciphertext).is_err());
         std::env::remove_var("KV_AT_REST_KEY");
     }
 }

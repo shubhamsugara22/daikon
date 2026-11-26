@@ -109,6 +109,26 @@ fn main() {
                 Err(e) => eprintln!("Error restoring snapshot: {}", e),
             }
         }
+        Commands::RotateKey => {
+            should_save = false;
+            let result = Wal::new(&wal_path).and_then(|wal| {
+                let wal = Arc::new(wal);
+                let wal_records = wal.rotate_encryption_key()?;
+                let pitr = Pitr::new(&snapshots_dir, wal)?;
+                let snapshots = pitr.rotate_encryption_key()?;
+                Ok((wal_records, snapshots))
+            });
+            match result {
+                Ok((wal_records, snapshots)) => println!(
+                    "Encryption key rotation complete: {} WAL records, {} snapshots",
+                    wal_records, snapshots
+                ),
+                Err(e) => eprintln!(
+                    "Error rotating encryption key. Keep KV_AT_REST_OLD_KEYS configured and rerun after fixing the issue: {}",
+                    e
+                ),
+            }
+        }
         Commands::Load => {
             should_save = false;
             match KvStore::load_from_file(&file_path) {

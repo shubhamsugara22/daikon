@@ -165,6 +165,35 @@ impl Wal {
         Ok(entries)
     }
 
+    /// Re-encrypt every WAL record with the active at-rest key.
+    pub fn rotate_encryption_key(&self) -> Result<usize> {
+        let file = std::fs::File::open(&self.path).map_err(KvStoreError::IoError)?;
+        let reader = BufReader::new(file);
+        let mut rotated = Vec::new();
+        let mut count = 0;
+
+        for (line_no, line) in reader.lines().enumerate() {
+            let line = line.map_err(KvStoreError::IoError)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let encrypted = crypto::reencrypt(line.as_bytes()).map_err(|error| {
+                KvStoreError::OperationFailed(format!(
+                    "Failed to rotate WAL line {}: {}",
+                    line_no + 1,
+                    error
+                ))
+            })?;
+            rotated.extend_from_slice(&encrypted);
+            rotated.push(b'\n');
+            count += 1;
+        }
+
+        crypto::replace_file(&self.path, &rotated).map_err(KvStoreError::OperationFailed)?;
+        info!("Re-encrypted {} WAL records", count);
+        Ok(count)
+    }
+
     /// Clear the WAL (called after taking a snapshot)
     pub fn clear(&self) -> Result<()> {
         std::fs::File::create(&self.path)

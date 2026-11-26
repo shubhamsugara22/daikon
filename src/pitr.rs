@@ -198,6 +198,26 @@ impl Pitr {
         Ok(snapshots)
     }
 
+    /// Re-encrypt all snapshots with the active at-rest key.
+    pub fn rotate_encryption_key(&self) -> Result<usize> {
+        let snapshots = self.list_snapshots()?;
+        let mut count = 0;
+        for snapshot in snapshots {
+            let path = self.snapshots_dir.join(&snapshot.snapshot_file);
+            let bytes = fs::read(&path).map_err(KvStoreError::IoError)?;
+            let encrypted = crypto::reencrypt(&bytes).map_err(|error| {
+                KvStoreError::OperationFailed(format!(
+                    "Failed to rotate snapshot {}: {}",
+                    snapshot.snapshot_file, error
+                ))
+            })?;
+            crypto::replace_file(&path, &encrypted).map_err(KvStoreError::OperationFailed)?;
+            count += 1;
+        }
+        info!("Re-encrypted {} snapshots", count);
+        Ok(count)
+    }
+
     /// Recover to a specific timestamp
     /// Returns the restored store state
     pub fn recover_to_timestamp(&self, target_timestamp: u64) -> Result<KvStore> {

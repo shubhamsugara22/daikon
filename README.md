@@ -73,9 +73,12 @@ cargo run -- stats
 cargo run -- backup
 cargo run -- restore                 # restore latest snapshot
 cargo run -- restore 1735689600      # restore to a Unix timestamp
+cargo run -- rotate-key              # re-encrypt WAL and snapshots with KV_AT_REST_KEY
 ```
 
 Use `--file`, `--wal-file`, and `--snapshots-dir` before the command to select the store file, WAL, and snapshot directory. For example: `cargo run -- --file data/store.json --wal-file data/server.wal --snapshots-dir data/snapshots backup`.
+
+For key rotation, set `KV_AT_REST_KEY` to the new key and `KV_AT_REST_OLD_KEYS` to the previous key or comma-separated previous keys, run `rotate-key`, and verify it completes. Only then remove the old keys. If rotation fails, keep the old keys configured and rerun after fixing the reported file.
 
 ### HTTP server
 
@@ -138,6 +141,7 @@ All settings are via environment variables. Defaults are shown.
 | `KV_TTL_CLEANUP_INTERVAL_SECS` | `0` (disabled) | Background expired-key cleanup interval |
 | `KV_SNAPSHOT_COMPRESSION` | `none` | Snapshot compression: `none`, `gzip`, `zstd` |
 | `KV_AT_REST_KEY` | _(none)_ | Optional 32-byte hex/base64 key for AES-256-GCM WAL and snapshot encryption |
+| `KV_AT_REST_OLD_KEYS` | _(none)_ | Comma-separated old 32-byte hex/base64 keys accepted for decryption during key rotation |
 | `KV_API_KEY` | _(none)_ | API key for mutating endpoints (`x-api-key` or `Bearer`) |
 | `KV_ENABLE_LUA` | `true` | Enable/disable Lua over HTTP |
 | `KV_MAX_LUA_SCRIPT_BYTES` | `16384` | Max Lua script payload size |
