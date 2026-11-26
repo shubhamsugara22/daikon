@@ -2,7 +2,7 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 const PREFIX: &str = "DAIKON-ENC1:";
@@ -37,6 +37,14 @@ pub fn enabled() -> bool {
     keys_from_env()
         .map(|(active, _)| active.is_some())
         .unwrap_or(false)
+}
+
+pub fn validate_rotation_config() -> Result<(), String> {
+    let (active, _) = keys_from_env()?;
+    if active.is_none() {
+        return Err("KV_AT_REST_KEY must be configured as the active key".to_string());
+    }
+    Ok(())
 }
 
 pub fn encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -93,20 +101,30 @@ pub fn decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 pub fn reencrypt(data: &[u8]) -> Result<Vec<u8>, String> {
-    if !enabled() {
-        return Err("KV_AT_REST_KEY must be set to rotate encrypted data".to_string());
-    }
+    validate_rotation_config()?;
     encrypt(&decrypt(data)?)
 }
 
 pub(crate) fn replace_file(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let temp_path = path.with_extension("rotate.tmp");
-    fs::write(&temp_path, contents).map_err(|error| error.to_string())?;
-    if let Err(error) = fs::rename(&temp_path, path) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error.to_string());
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temp_file =
+        tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+    if let Ok(metadata) = path.metadata() {
+        temp_file
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .map_err(|error| error.to_string())?;
     }
-    Ok(())
+    temp_file
+        .write_all(contents)
+        .map_err(|error| error.to_string())?;
+    temp_file
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.error.to_string())
 }
 
 #[cfg(test)]

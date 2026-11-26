@@ -78,7 +78,7 @@ cargo run -- rotate-key              # re-encrypt WAL and snapshots with KV_AT_R
 
 Use `--file`, `--wal-file`, and `--snapshots-dir` before the command to select the store file, WAL, and snapshot directory. For example: `cargo run -- --file data/store.json --wal-file data/server.wal --snapshots-dir data/snapshots backup`.
 
-For key rotation, set `KV_AT_REST_KEY` to the new key and `KV_AT_REST_OLD_KEYS` to the previous key or comma-separated previous keys, run `rotate-key`, and verify it completes. Only then remove the old keys. If rotation fails, keep the old keys configured and rerun after fixing the reported file.
+Stop the server before key rotation. Set `KV_AT_REST_KEY` to the new key and `KV_AT_REST_OLD_KEYS` to the previous key or comma-separated previous keys, run `rotate-key`, and verify it completes. Only then remove the old keys. If rotation fails, keep the old keys configured and rerun after fixing the reported file.
 
 ### HTTP server
 

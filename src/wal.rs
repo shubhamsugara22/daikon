@@ -167,6 +167,7 @@ impl Wal {
 
     /// Re-encrypt every WAL record with the active at-rest key.
     pub fn rotate_encryption_key(&self) -> Result<usize> {
+        crypto::validate_rotation_config().map_err(KvStoreError::OperationFailed)?;
         let file = std::fs::File::open(&self.path).map_err(KvStoreError::IoError)?;
         let reader = BufReader::new(file);
         let mut rotated = Vec::new();

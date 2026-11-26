@@ -200,6 +200,7 @@ impl Pitr {
 
     /// Re-encrypt all snapshots with the active at-rest key.
     pub fn rotate_encryption_key(&self) -> Result<usize> {
+        crypto::validate_rotation_config().map_err(KvStoreError::OperationFailed)?;
         let snapshots = self.list_snapshots()?;
         let mut count = 0;
         for snapshot in snapshots {
