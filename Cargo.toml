@@ -35,6 +35,7 @@ getrandom = "0.4.3"
 rustls = "0.23"
 rustls-pemfile = "2"
 tempfile = "3.8"
+subtle = "2.6"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = [

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
 use tracing::{debug, info, warn};
 
 /// Replication role for a KV store node
@@ -40,8 +41,8 @@ pub struct ReplicationMaster {
     wal: Arc<Wal>,
     replicas: Arc<RwLock<HashMap<String, ReplicaInfo>>>,
     heartbeat_timeout_secs: u64,
-    /// Optional shared-secret. Replicas must send `Authorization: Bearer <token>`.
-    auth_token: Option<String>,
+    /// Accepted shared-secrets. Replicas send the active token.
+    auth_tokens: Option<Vec<String>>,
 }
 
 impl ReplicationMaster {
@@ -50,7 +51,26 @@ impl ReplicationMaster {
     /// `auth_token` – if `Some(secret)`, inbound replica requests must carry
     /// `Authorization: Bearer <secret>`. Pass `None` to disable auth.
     pub fn new(wal: Arc<Wal>, heartbeat_timeout_secs: u64, auth_token: Option<String>) -> Self {
-        if auth_token.is_some() {
+        Self::with_auth_tokens(
+            wal,
+            heartbeat_timeout_secs,
+            auth_token.into_iter().collect(),
+        )
+    }
+
+    /// Create a replication master that accepts active and previous secrets.
+    pub fn with_auth_tokens(
+        wal: Arc<Wal>,
+        heartbeat_timeout_secs: u64,
+        mut auth_tokens: Vec<String>,
+    ) -> Self {
+        auth_tokens.retain(|token| !token.is_empty());
+        let auth_tokens = if auth_tokens.is_empty() {
+            None
+        } else {
+            Some(auth_tokens)
+        };
+        if auth_tokens.is_some() {
             info!("Initializing replication master (auth enabled)");
         } else {
             info!("Initializing replication master (no auth)");
@@ -59,16 +79,22 @@ impl ReplicationMaster {
             wal,
             replicas: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_timeout_secs,
-            auth_token,
+            auth_tokens,
         }
     }
 
     /// Verify an auth token from an inbound request.
     /// Returns `true` if no auth is configured, or if `provided` matches the secret.
     pub fn verify_auth(&self, provided: Option<&str>) -> bool {
-        match (&self.auth_token, provided) {
+        match (&self.auth_tokens, provided) {
             (None, _) => true,
-            (Some(expected), Some(token)) => token == expected.as_str(),
+            (Some(expected_tokens), Some(token)) => {
+                let mut matched = 0u8;
+                for expected in expected_tokens {
+                    matched |= expected.as_bytes().ct_eq(token.as_bytes()).unwrap_u8();
+                }
+                matched == 1
+            }
             (Some(_), None) => false,
         }
     }
@@ -634,6 +660,22 @@ mod tests {
 
         assert!(master.verify_auth(Some("supersecret")));
         assert!(!master.verify_auth(Some("wrongtoken")));
+        assert!(!master.verify_auth(None));
+    }
+
+    #[test]
+    fn test_master_accepts_active_and_previous_tokens() {
+        let temp_dir = tempdir().unwrap();
+        let wal = Arc::new(Wal::new(temp_dir.path().join("wal.log")).unwrap());
+        let master = ReplicationMaster::with_auth_tokens(
+            wal,
+            30,
+            vec!["new-secret".to_string(), "old-secret".to_string()],
+        );
+
+        assert!(master.verify_auth(Some("new-secret")));
+        assert!(master.verify_auth(Some("old-secret")));
+        assert!(!master.verify_auth(Some("wrong-secret")));
         assert!(!master.verify_auth(None));
     }
 
