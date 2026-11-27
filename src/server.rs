@@ -144,11 +144,30 @@ async fn main() -> std::io::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
-    // Shared secret between master and replicas.  Set KV_REPLICATION_SECRET on
-    // ALL nodes (master + replicas) to the same value to enable auth.
-    let replication_secret = env::var("KV_REPLICATION_SECRET").ok();
+    // Replicas send the active secret; masters also accept previous secrets during rotation.
+    let replication_secret = env::var("KV_REPLICATION_SECRET")
+        .ok()
+        .filter(|secret| !secret.trim().is_empty());
+    let previous_replication_secrets = env::var("KV_REPLICATION_OLD_SECRETS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|secret| !secret.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if replication_secret.is_none() && !previous_replication_secrets.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "KV_REPLICATION_SECRET must be set when KV_REPLICATION_OLD_SECRETS is configured",
+        ));
+    }
+    let accepted_replication_secrets = replication_secret
+        .clone()
+        .into_iter()
+        .chain(previous_replication_secrets)
+        .collect::<Vec<_>>();
     if replication_secret.is_some() {
-        info!("Replication auth is ENABLED (KV_REPLICATION_SECRET is set)");
+        info!("Replication auth is ENABLED (active secret configured)");
     } else {
         info!("Replication auth is DISABLED (set KV_REPLICATION_SECRET to enable)");
     }
@@ -221,10 +240,10 @@ async fn main() -> std::io::Result<()> {
 
     // Initialize replication based on role
     let replication_master = if replication_role == ReplicationRole::Master {
-        Some(Arc::new(ReplicationMaster::new(
+        Some(Arc::new(ReplicationMaster::with_auth_tokens(
             Arc::clone(&wal),
             30,
-            replication_secret.clone(),
+            accepted_replication_secrets,
         )))
     } else {
         None

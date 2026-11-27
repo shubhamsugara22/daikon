@@ -159,6 +159,7 @@ All settings are via environment variables. Defaults are shown.
 | `KV_REPLICA_ID` | auto | Replica identifier |
 | `KV_REPLICATION_POLL_INTERVAL` | `5` | Sync poll interval (seconds) |
 | `KV_REPLICATION_SECRET` | _(none)_ | Replication bearer token |
+| `KV_REPLICATION_OLD_SECRETS` | _(none)_ | Comma-separated previous bearer tokens accepted by masters during secret rotation |
 | `KV_KEYSPACE_NOTIFICATIONS` | `false` | Enable keyspace event notifications |
 | `RUST_LOG` | `info` | Log level (tracing) |
 
@@ -173,6 +174,8 @@ docker run --rm -p 8080:8080 \
 ```
 
 A production-ready `docker-compose.yml` is included with resource limits, read-only filesystem, and named volumes.
+
+To rotate a replication secret without interrupting replicas, configure the master with the new `KV_REPLICATION_SECRET` and include the old token in `KV_REPLICATION_OLD_SECRETS`. Update replicas to the new `KV_REPLICATION_SECRET`, then remove the old token from the master's previous-secret list after all replicas reconnect.
 
 Native HTTPS example:
 
